@@ -1,14 +1,20 @@
 /**
  * Credentials store for API keys / RPC endpoints.
  *
- *   - توکن‌ها با AES-256-GCM (همون WALLET_MASTER_KEY) encrypt می‌شن
- *   - در memory cache می‌شن (TTL = 60s)
+ *   - توکن‌ها با AES-256-GCM (همون keyring) encrypt می‌شن
+ *   - در memory cache (TTL = 5s)
  *   - Round-robin rotation با skip موقت در صورت rate-limit
+ *   - Lazy key migration: اگه ردیف version قدیمی داره، در پس‌زمینه re-encrypt
  *   - Admin از پنل CRUD می‌کنه
  */
 
 import { pool } from '../db/pool.js';
-import { encryptMnemonic, decryptMnemonic } from '../crypto/aes.js';
+import {
+  encryptMnemonic,
+  decryptMnemonic,
+  maybeReEncrypt,
+  type EncryptedMnemonic,
+} from '../crypto/aes.js';
 
 export type Provider = 'trongrid' | 'eth_rpc' | 'btc_api';
 
@@ -28,15 +34,54 @@ export interface CredentialRow {
 }
 
 // ─── Cache ───
-const CACHE_TTL_MS = 60_000;
+// TTL کوتاه (۵ ثانیه): اگه ادمین credential رو غیرفعال کنه یا rotate،
+// بعد از حداکثر ۵ ثانیه worker متوقف می‌شه استفاده‌اش. CRUD endpoint ها
+// خودشون invalidateCache صدا می‌زنن برای اعمال فوری توی همین process.
+const CACHE_TTL_MS = 5_000;
 const cache: {
   [P in Provider]?: { loadedAt: number; items: CredentialRow[]; cursor: number };
 } = {};
 
+function rowToEnc(r: {
+  value_ciphertext: Buffer;
+  value_nonce: Buffer;
+  value_tag: Buffer;
+  encryption_version: number;
+}): EncryptedMnemonic {
+  return {
+    ciphertext: r.value_ciphertext,
+    nonce: r.value_nonce,
+    tag: r.value_tag,
+    version: r.encryption_version,
+  };
+}
+
+async function lazyReEncryptCredential(
+  id: number,
+  enc: EncryptedMnemonic,
+  plaintext: string
+): Promise<void> {
+  const updated = maybeReEncrypt(enc, plaintext);
+  if (!updated) return;
+  try {
+    await pool.query(
+      `UPDATE api_credentials
+         SET value_ciphertext = $1,
+             value_nonce = $2,
+             value_tag = $3,
+             encryption_version = $4
+       WHERE id = $5 AND encryption_version = $6`,
+      [updated.ciphertext, updated.nonce, updated.tag, updated.version, id, enc.version]
+    );
+  } catch (e) {
+    console.error(`[crypto] lazy re-encrypt cred=${id} failed:`, (e as Error).message);
+  }
+}
+
 async function loadProvider(provider: Provider): Promise<CredentialRow[]> {
   const res = await pool.query(
     `SELECT id, provider, label,
-            value_ciphertext, value_nonce, value_tag,
+            value_ciphertext, value_nonce, value_tag, encryption_version,
             last_used_at, last_error_at, last_error_message,
             rate_limited_until, success_count, failure_count,
             is_active, created_at
@@ -46,25 +91,25 @@ async function loadProvider(provider: Provider): Promise<CredentialRow[]> {
     [provider]
   );
 
-  return res.rows.map((r) => ({
-    id: r.id,
-    provider: r.provider,
-    label: r.label,
-    value: decryptMnemonic({
-      ciphertext: r.value_ciphertext,
-      nonce: r.value_nonce,
-      tag: r.value_tag,
-      version: 1,
-    }),
-    lastUsedAt: r.last_used_at,
-    lastErrorAt: r.last_error_at,
-    lastErrorMessage: r.last_error_message,
-    rateLimitedUntil: r.rate_limited_until,
-    successCount: Number(r.success_count),
-    failureCount: Number(r.failure_count),
-    isActive: r.is_active,
-    createdAt: r.created_at,
-  }));
+  return res.rows.map((r) => {
+    const enc = rowToEnc(r);
+    const value = decryptMnemonic(enc);
+    void lazyReEncryptCredential(r.id, enc, value);
+    return {
+      id: r.id,
+      provider: r.provider,
+      label: r.label,
+      value,
+      lastUsedAt: r.last_used_at,
+      lastErrorAt: r.last_error_at,
+      lastErrorMessage: r.last_error_message,
+      rateLimitedUntil: r.rate_limited_until,
+      successCount: Number(r.success_count),
+      failureCount: Number(r.failure_count),
+      isActive: r.is_active,
+      createdAt: r.created_at,
+    };
+  });
 }
 
 async function getProviderCache(provider: Provider): Promise<{ items: CredentialRow[]; cursor: number }> {
@@ -152,8 +197,10 @@ export async function markError(credId: number, message: string): Promise<void> 
 
 // ─── CRUD ───
 
-export async function listCredentials(provider?: Provider): Promise<Array<Omit<CredentialRow, 'value'> & { valuePreview: string }>> {
-  const params: any[] = [];
+export async function listCredentials(
+  provider?: Provider
+): Promise<Array<Omit<CredentialRow, 'value'> & { valuePreview: string }>> {
+  const params: unknown[] = [];
   let where = '';
   if (provider) {
     params.push(provider);
@@ -162,7 +209,7 @@ export async function listCredentials(provider?: Provider): Promise<Array<Omit<C
 
   const res = await pool.query(
     `SELECT id, provider, label,
-            value_ciphertext, value_nonce, value_tag,
+            value_ciphertext, value_nonce, value_tag, encryption_version,
             last_used_at, last_error_at, last_error_message,
             rate_limited_until, success_count, failure_count,
             is_active, created_at
@@ -172,13 +219,7 @@ export async function listCredentials(provider?: Provider): Promise<Array<Omit<C
   );
 
   return res.rows.map((r) => {
-    const value = decryptMnemonic({
-      ciphertext: r.value_ciphertext,
-      nonce: r.value_nonce,
-      tag: r.value_tag,
-      version: 1,
-    });
-    // فقط اولین و آخرین ۴ کاراکتر نشون داده می‌شه
+    const value = decryptMnemonic(rowToEnc(r));
     const preview = value.length > 12 ? `${value.slice(0, 8)}…${value.slice(-4)}` : '***';
     return {
       id: r.id,
@@ -206,10 +247,18 @@ export async function addCredential(opts: {
   const enc = encryptMnemonic(opts.value);
   const res = await pool.query<{ id: number }>(
     `INSERT INTO api_credentials
-     (provider, label, value_ciphertext, value_nonce, value_tag, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6)
+     (provider, label, value_ciphertext, value_nonce, value_tag, encryption_version, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id`,
-    [opts.provider, opts.label ?? null, enc.ciphertext, enc.nonce, enc.tag, opts.adminId]
+    [
+      opts.provider,
+      opts.label ?? null,
+      enc.ciphertext,
+      enc.nonce,
+      enc.tag,
+      enc.version,
+      opts.adminId,
+    ]
   );
   invalidateCache(opts.provider);
   return res.rows[0].id;

@@ -1,9 +1,10 @@
 /**
  * BullMQ queue definitions.
  *
- * دو صف اصلی:
+ * صف‌ها:
  *   - wallet-generation: batch تولید ولت
- *   - balance-check: چک موجودی (repeatable)
+ *   - balance-check:     چک موجودی (single repeatable + on-demand)
+ *   - cleanup:           پاک‌سازی audit/sessions/old runs (روزانه)
  */
 
 import { Queue } from 'bullmq';
@@ -11,7 +12,7 @@ import { createQueueConnection, QUEUE_NAMES } from './connection.js';
 
 // ─── Typed job data ───
 export interface GenerationJobData {
-  jobDbId: number;                  // id تو generation_jobs table
+  jobDbId: number;
   startUserId: number;
   count: number;
   wordCount: 12 | 24;
@@ -19,12 +20,17 @@ export interface GenerationJobData {
 }
 
 export interface BalanceCheckJobData {
-  priority: 'active' | 'normal' | 'inactive';
+  // backward-compat: قبلاً priority سه مقداری داشت. الان فقط hint برای batchSize
+  // و logging هست. scheduling اصلی بر اساس next_check_at تو DB انجام می‌شه.
+  priority?: 'active' | 'normal' | 'inactive' | 'due';
   batchSize?: number;
 }
 
-// ─── Queue instances ───
-// یه connection share می‌کنیم بین queue‌ها (producer side)
+export interface CleanupJobData {
+  trigger: 'scheduled' | 'manual';
+}
+
+// یه connection share بین queue‌ها (producer side)
 const producerConnection = createQueueConnection();
 
 export const generationQueue = new Queue<GenerationJobData>(QUEUE_NAMES.GENERATION, {
@@ -47,38 +53,41 @@ export const balanceQueue = new Queue<BalanceCheckJobData>(QUEUE_NAMES.BALANCE_C
   },
 });
 
+export const cleanupQueue = new Queue<CleanupJobData>(QUEUE_NAMES.CLEANUP, {
+  connection: producerConnection,
+  defaultJobOptions: {
+    attempts: 1,
+    removeOnComplete: { count: 30 },
+    removeOnFail: { count: 30 },
+  },
+});
+
 /**
- * repeatable jobs برای balance check با سه priority مختلف.
- * در startup worker صدا می‌خوریم.
+ * یه repeatable job که هر BALANCE_CHECK_INTERVAL_SEC ثانیه (پیش‌فرض ۳۰)
+ * worker رو فرا می‌خونه. خود worker از DB آدرس‌های `next_check_at <= NOW()`
+ * رو می‌گیره و چک می‌کنه.
  */
 export async function scheduleRecurringBalanceChecks(): Promise<void> {
-  // active: هر ۲ دقیقه
+  const intervalSec = Number(process.env.BALANCE_CHECK_INTERVAL_SEC ?? 30);
   await balanceQueue.add(
-    'check-active',
-    { priority: 'active' },
+    'check-due',
+    { priority: 'due' },
     {
-      repeat: { every: 2 * 60 * 1000 },
-      jobId: 'recurring:active', // جلوگیری از duplicate
+      repeat: { every: Math.max(5, intervalSec) * 1000 },
+      jobId: 'recurring:due',
     }
   );
+}
 
-  // normal: هر ۱۵ دقیقه
-  await balanceQueue.add(
-    'check-normal',
-    { priority: 'normal' },
+/** repeatable cleanup روزانه (default 03:00 UTC). */
+export async function scheduleRecurringCleanup(): Promise<void> {
+  const cron = process.env.CLEANUP_CRON ?? '0 3 * * *';
+  await cleanupQueue.add(
+    'cleanup',
+    { trigger: 'scheduled' },
     {
-      repeat: { every: 15 * 60 * 1000 },
-      jobId: 'recurring:normal',
-    }
-  );
-
-  // inactive: هر ۲ ساعت
-  await balanceQueue.add(
-    'check-inactive',
-    { priority: 'inactive' },
-    {
-      repeat: { every: 2 * 60 * 60 * 1000 },
-      jobId: 'recurring:inactive',
+      repeat: { pattern: cron },
+      jobId: 'recurring:cleanup',
     }
   );
 }

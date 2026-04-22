@@ -5,12 +5,11 @@
 
 import type { FastifyInstance } from 'fastify';
 import { pool } from '../../db/pool.js';
-import { authGuard } from '../../auth/index.js';
 
 export async function statsRoutes(app: FastifyInstance) {
-  app.addHook('preHandler', authGuard);
+  const authed = [app.requireAuth, app.requireNotMustChange];
 
-  app.get('/api/stats', async () => {
+  app.get('/api/stats', { preHandler: authed }, async () => {
     const [wallets, addresses, balances, jobs, benchmarks] = await Promise.all([
       pool.query<{ total: string; words12: string; words24: string }>(
         `SELECT COUNT(*)::text AS total,

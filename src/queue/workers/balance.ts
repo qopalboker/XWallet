@@ -1,8 +1,15 @@
 /**
- * Balance check worker:
- *   از صف balance-check کار می‌گیره (با priority مختلف)،
- *   آدرس‌های stale رو از DB میاره، batch می‌کنه، بهینه‌ترین API رو صدا می‌زنه،
- *   نتیجه رو bulk update می‌کنه + cache می‌کنه.
+ * Balance check worker — schedule بر اساس next_check_at.
+ *
+ * هر job (که هر چند ثانیه یه بار فراخوانی می‌شه) آدرس‌هایی که next_check_at
+ * منقضی شده رو میاره (تا batchSize)، چک می‌کنه، و next_check_at رو بر اساس
+ * activity جدید محاسبه می‌کنه.
+ *
+ * tier ها (تا اپراتور بدونه چی پیش میاد):
+ *   - active   (موجودی > 0 یا تغییر اخیر در ۱h): بعدی +ACTIVE_INTERVAL  (پیش‌فرض 2 min)
+ *   - normal   (موجودی صفر، فعالیت اخیر در ۲۴h):  بعدی +NORMAL_INTERVAL  (پیش‌فرض 30 min)
+ *   - cool     (موجودی صفر، 1-30 روز بدون فعالیت):  بعدی +COOL_INTERVAL    (پیش‌فرض 2 hr)
+ *   - inactive (>30 روز بدون فعالیت):              بعدی +INACTIVE_INTERVAL (پیش‌فرض 12 hr)
  */
 
 import { Worker } from 'bullmq';
@@ -11,53 +18,69 @@ import type { BalanceCheckJobData } from '../queues.js';
 import { pool } from '../../db/pool.js';
 import { fetchBalancesByChain, setCached } from '../../balance/cache.js';
 
-// Stale threshold (دقیقه) بر اساس priority
-const STALE_MINUTES = {
-  active: 2,
-  normal: 15,
-  inactive: 120,
-} as const;
-
-const PRIORITY_NUMBER = {
-  active: 2,
-  normal: 1,
-  inactive: 0,
-} as const;
-
 interface AddressRow {
   id: number;
   chain: 'BTC' | 'ETH' | 'TRON';
   address: string;
   native_balance: string;
   usdt_balance: string;
+  last_balance_change_at: Date | null;
 }
 
-export function startBalanceWorker() {
+const intervalSec = (name: string, fallback: number) => {
+  const v = Number(process.env[name]);
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : fallback;
+};
+
+const ACTIVE_S = intervalSec('ACTIVE_INTERVAL_SEC', 2 * 60);
+const NORMAL_S = intervalSec('NORMAL_INTERVAL_SEC', 30 * 60);
+const COOL_S = intervalSec('COOL_INTERVAL_SEC', 2 * 60 * 60);
+const INACTIVE_S = intervalSec('INACTIVE_INTERVAL_SEC', 12 * 60 * 60);
+
+function pickInterval(
+  hasBalance: boolean,
+  changedNow: boolean,
+  lastChange: Date | null
+): { seconds: number; tier: 'active' | 'normal' | 'cool' | 'inactive'; priority: 0 | 1 | 2 } {
+  if (hasBalance || changedNow) {
+    return { seconds: ACTIVE_S, tier: 'active', priority: 2 };
+  }
+
+  if (!lastChange) {
+    return { seconds: NORMAL_S, tier: 'normal', priority: 1 };
+  }
+
+  const ageMs = Date.now() - new Date(lastChange).getTime();
+  const dayMs = 24 * 60 * 60 * 1000;
+
+  if (ageMs < dayMs) return { seconds: NORMAL_S, tier: 'normal', priority: 1 };
+  if (ageMs < 30 * dayMs) return { seconds: COOL_S, tier: 'cool', priority: 1 };
+  return { seconds: INACTIVE_S, tier: 'inactive', priority: 0 };
+}
+
+export function startBalanceWorker(): Worker {
   const worker = new Worker<BalanceCheckJobData>(
     QUEUE_NAMES.BALANCE_CHECK,
     async (job) => {
-      const { priority, batchSize = 200 } = job.data;
-      const priorityNum = PRIORITY_NUMBER[priority];
-      const staleMin = STALE_MINUTES[priority];
+      const batchSize = job.data.batchSize ?? 200;
 
-      // آدرس‌های stale رو بگیر
+      // آدرس‌های due
       const res = await pool.query<AddressRow>(
         `SELECT id, chain, address,
-                native_balance::text, usdt_balance::text
+                native_balance::text, usdt_balance::text,
+                last_balance_change_at
          FROM addresses
-         WHERE priority = $1
-           AND status = 'active'
-           AND (last_checked_at IS NULL OR last_checked_at < NOW() - ($2 || ' minutes')::interval)
-         ORDER BY last_checked_at NULLS FIRST
-         LIMIT $3`,
-        [priorityNum, staleMin.toString(), batchSize]
+         WHERE status = 'active'
+           AND next_check_at <= NOW()
+         ORDER BY next_check_at ASC
+         LIMIT $1`,
+        [batchSize]
       );
 
       if (res.rows.length === 0) {
-        return { checked: 0, priority };
+        return { checked: 0, changed: 0 };
       }
 
-      // گروه‌بندی بر اساس chain
       const byChain = {
         BTC: [] as AddressRow[],
         ETH: [] as AddressRow[],
@@ -65,107 +88,85 @@ export function startBalanceWorker() {
       };
       for (const row of res.rows) byChain[row.chain].push(row);
 
-      // Fetch موازی از هر سه API
       const fetched = await fetchBalancesByChain(
         byChain.BTC.map((r) => r.address),
         byChain.ETH.map((r) => r.address),
         byChain.TRON.map((r) => r.address)
       );
 
-      // Build update arrays
       const ids: number[] = [];
       const natives: string[] = [];
       const usdts: string[] = [];
-      const changes: Array<{ id: number; changed: boolean }> = [];
+      const changedFlags: boolean[] = [];
+      const nextChecks: string[] = []; // ISO strings
+      const priorities: number[] = [];
 
-      for (const row of byChain.BTC) {
-        const b = fetched.btc.get(row.address);
-        if (!b) continue;
-        const newNative = b.sats.toString();
-        ids.push(row.id);
-        natives.push(newNative);
-        usdts.push('0');
-        changes.push({ id: row.id, changed: newNative !== row.native_balance });
+      const tiersCount = { active: 0, normal: 0, cool: 0, inactive: 0 };
 
-        await setCached(
-          'BTC',
-          row.address,
-          { native: newNative, usdt: '0', checkedAt: Date.now() },
-          priorityNum as 0 | 1 | 2
-        );
-      }
+      const process = (rows: AddressRow[], extract: (addr: string) => { native: string; usdt: string } | null) => {
+        for (const row of rows) {
+          const out = extract(row.address);
+          if (!out) continue;
 
-      for (const row of byChain.ETH) {
-        const b = fetched.eth.get(row.address);
-        if (!b) continue;
-        const newNative = b.eth.toString();
-        const newUsdt = b.usdt.toString();
-        ids.push(row.id);
-        natives.push(newNative);
-        usdts.push(newUsdt);
-        changes.push({
-          id: row.id,
-          changed: newNative !== row.native_balance || newUsdt !== row.usdt_balance,
-        });
+          const changed = out.native !== row.native_balance || out.usdt !== row.usdt_balance;
+          const hasBalance = out.native !== '0' || out.usdt !== '0';
+          const decision = pickInterval(hasBalance, changed, row.last_balance_change_at);
 
-        await setCached(
-          'ETH',
-          row.address,
-          { native: newNative, usdt: newUsdt, checkedAt: Date.now() },
-          priorityNum as 0 | 1 | 2
-        );
-      }
+          ids.push(row.id);
+          natives.push(out.native);
+          usdts.push(out.usdt);
+          changedFlags.push(changed);
+          nextChecks.push(new Date(Date.now() + decision.seconds * 1000).toISOString());
+          priorities.push(decision.priority);
+          tiersCount[decision.tier]++;
 
-      for (const row of byChain.TRON) {
-        const b = fetched.tron.get(row.address);
-        if (!b) continue;
-        const newNative = b.trx.toString();
-        const newUsdt = b.usdt.toString();
-        ids.push(row.id);
-        natives.push(newNative);
-        usdts.push(newUsdt);
-        changes.push({
-          id: row.id,
-          changed: newNative !== row.native_balance || newUsdt !== row.usdt_balance,
-        });
+          // Redis cache
+          void setCached(
+            row.chain,
+            row.address,
+            { native: out.native, usdt: out.usdt, checkedAt: Date.now() },
+            decision.priority
+          );
+        }
+      };
 
-        await setCached(
-          'TRON',
-          row.address,
-          { native: newNative, usdt: newUsdt, checkedAt: Date.now() },
-          priorityNum as 0 | 1 | 2
-        );
-      }
+      process(byChain.BTC, (addr) => {
+        const b = fetched.btc.get(addr);
+        if (!b) return null;
+        return { native: b.sats.toString(), usdt: '0' };
+      });
 
-      if (ids.length === 0) return { checked: 0, priority };
+      process(byChain.ETH, (addr) => {
+        const b = fetched.eth.get(addr);
+        if (!b) return null;
+        return { native: b.eth.toString(), usdt: b.usdt.toString() };
+      });
 
-      // Bulk update با UNNEST
+      process(byChain.TRON, (addr) => {
+        const b = fetched.tron.get(addr);
+        if (!b) return null;
+        return { native: b.trx.toString(), usdt: b.usdt.toString() };
+      });
+
+      if (ids.length === 0) return { checked: 0, changed: 0 };
+
+      // Bulk update — UNNEST برای performance
       await pool.query(
         `UPDATE addresses a
          SET native_balance = v.native,
              usdt_balance = v.usdt,
              last_checked_at = NOW(),
-             last_balance_change_at = CASE
-               WHEN v.changed THEN NOW()
-               ELSE a.last_balance_change_at
-             END,
-             priority = CASE
-               -- اگه balance تغییر کرد یا نصفر شد: priority بره بالا
-               WHEN v.changed OR v.native::numeric > 0 OR v.usdt::numeric > 0 THEN 2
-               -- اگه خالی و >30 روز بدون تغییر: inactive
-               WHEN v.native::numeric = 0 AND v.usdt::numeric = 0
-                    AND a.last_balance_change_at IS NOT NULL
-                    AND a.last_balance_change_at < NOW() - INTERVAL '30 days' THEN 0
-               ELSE a.priority
-             END
-         FROM UNNEST($1::bigint[], $2::numeric[], $3::numeric[], $4::boolean[])
-              AS v(id, native, usdt, changed)
+             last_balance_change_at = CASE WHEN v.changed THEN NOW() ELSE a.last_balance_change_at END,
+             priority = v.priority,
+             next_check_at = v.next_check_at::timestamptz
+         FROM UNNEST($1::bigint[], $2::numeric[], $3::numeric[], $4::boolean[], $5::text[], $6::int[])
+              AS v(id, native, usdt, changed, next_check_at, priority)
          WHERE a.id = v.id`,
-        [ids, natives, usdts, changes.map((c) => c.changed)]
+        [ids, natives, usdts, changedFlags, nextChecks, priorities]
       );
 
-      const changed = changes.filter((c) => c.changed).length;
-      return { checked: ids.length, changed, priority };
+      const changedCount = changedFlags.filter(Boolean).length;
+      return { checked: ids.length, changed: changedCount, tiers: tiersCount };
     },
     {
       connection: createQueueConnection(),
@@ -174,8 +175,10 @@ export function startBalanceWorker() {
   );
 
   worker.on('completed', (job) => {
-    const r = job.returnvalue as any;
-    console.log(`[bal] ${r.priority}: checked=${r.checked} changed=${r.changed ?? 0}`);
+    const r = job.returnvalue as { checked: number; changed: number; tiers?: Record<string, number> };
+    if (r.checked > 0) {
+      console.log(`[bal] checked=${r.checked} changed=${r.changed} tiers=${JSON.stringify(r.tiers ?? {})}`);
+    }
   });
 
   worker.on('failed', (job, err) => {

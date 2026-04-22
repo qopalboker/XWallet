@@ -10,27 +10,42 @@
 import 'dotenv/config';
 import { startGenerationWorker } from './queue/workers/generation.js';
 import { startBalanceWorker } from './queue/workers/balance.js';
-import { scheduleRecurringBalanceChecks } from './queue/queues.js';
+import { startCleanupWorker } from './queue/workers/cleanup.js';
+import {
+  scheduleRecurringBalanceChecks,
+  scheduleRecurringCleanup,
+} from './queue/queues.js';
+import { closePool } from './db/pool.js';
+import { closeRedis } from './redis/client.js';
 
 async function main() {
   console.log('▶  starting workers...');
 
   const genWorker = startGenerationWorker();
   const balWorker = startBalanceWorker();
+  const cleanupWorker = startCleanupWorker();
 
-  // تنظیم scheduled jobs (idempotent — اگه قبلاً ست شده باشن، override می‌شن)
+  // Repeatable jobs (idempotent — اگه قبلاً ست شدن، override می‌شن)
   await scheduleRecurringBalanceChecks();
-  console.log('✔  scheduled: active=2min, normal=15min, inactive=2hr');
+  await scheduleRecurringCleanup();
+  console.log('✔  scheduled: balance check (~30s), cleanup (daily)');
 
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     console.log(`\n[${signal}] shutting down workers...`);
-    await Promise.all([genWorker.close(), balWorker.close()]);
-    process.exit(0);
+    try {
+      await Promise.all([genWorker.close(), balWorker.close(), cleanupWorker.close()]);
+      await closePool();
+      await closeRedis();
+      process.exit(0);
+    } catch (e) {
+      console.error('shutdown error:', e);
+      process.exit(1);
+    }
   };
 
-  process.on('SIGINT', () => shutdown('SIGINT'));
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
   console.log('✔  workers running. Ctrl+C برای توقف.');
 }

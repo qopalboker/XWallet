@@ -10,7 +10,6 @@
 
 import type { FastifyInstance } from 'fastify';
 import { pool } from '../../db/pool.js';
-import { authGuard } from '../../auth/index.js';
 import {
   startBenchmark,
   requestStop,
@@ -20,10 +19,10 @@ import {
 import type { Chain } from '../../wallet/derivation.js';
 
 export async function benchmarkRoutes(app: FastifyInstance) {
-  app.addHook('preHandler', authGuard);
+  const authed = [app.requireAuth, app.requireNotMustChange];
 
   // ─── GET /api/benchmark/current ───
-  app.get('/api/benchmark/current', async () => {
+  app.get('/api/benchmark/current', { preHandler: authed }, async () => {
     const runId = getCurrentRunId();
     if (!runId) return { running: false };
 
@@ -42,6 +41,7 @@ export async function benchmarkRoutes(app: FastifyInstance) {
   // ─── GET /api/benchmark/runs ───
   app.get<{ Querystring: { limit?: number } }>(
     '/api/benchmark/runs',
+    { preHandler: authed },
     async (request) => {
       const limit = Math.min(100, Math.max(1, Number(request.query.limit ?? 20)));
       const res = await pool.query(
@@ -60,6 +60,7 @@ export async function benchmarkRoutes(app: FastifyInstance) {
   // ─── GET /api/benchmark/runs/:id ───
   app.get<{ Params: { id: string } }>(
     '/api/benchmark/runs/:id',
+    { preHandler: authed },
     async (request, reply) => {
       const res = await pool.query(
         `SELECT * FROM benchmark_runs WHERE id = $1`,
@@ -81,6 +82,7 @@ export async function benchmarkRoutes(app: FastifyInstance) {
   }>(
     '/api/benchmark/start',
     {
+      preHandler: authed,
       schema: {
         body: {
           type: 'object',
@@ -115,13 +117,13 @@ export async function benchmarkRoutes(app: FastifyInstance) {
   );
 
   // ─── POST /api/benchmark/stop ───
-  app.post('/api/benchmark/stop', async () => {
+  app.post('/api/benchmark/stop', { preHandler: authed }, async () => {
     await requestStop();
     return { ok: true };
   });
 
   // ─── GET /api/benchmark/math ───
-  // محاسبات آموزشی برای نمایش دادن به کاربر
+  // محاسبات آموزشی — این endpoint عمدا عمومیه (auth لازم نداره)
   app.get('/api/benchmark/math', async () => {
     return {
       maxTarget: MAX_TARGET,

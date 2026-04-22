@@ -19,6 +19,7 @@ import {
   revokeAllSessionsForAdmin,
 } from '../../auth/jwt.js';
 import { COOKIE_NAME, cookieOptions } from '../../auth/index.js';
+import { sanitizeAuditDetails } from '../../util/sanitize.js';
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MINUTES = 15;
@@ -60,7 +61,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
           `INSERT INTO admin_audit_log
              (admin_id, username, action, success, details, ip_address, user_agent)
            VALUES ($1, $2, 'login', $3, $4, $5, $6)`,
-          [adminId, username, success, details, ip, userAgent]
+          [adminId, username, success, sanitizeAuditDetails(details), ip, userAgent]
         );
 
       const res = await pool.query(
@@ -128,7 +129,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
         { ip, userAgent }
       );
 
-      reply.setCookie(COOKIE_NAME, token, {
+      void reply.setCookie(COOKIE_NAME, token, {
         ...cookieOptions,
         expires: expiresAt,
       });
@@ -160,7 +161,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
           [req.admin.sub, req.ip, req.headers['user-agent'] ?? null]
         );
       }
-      reply.clearCookie(COOKIE_NAME, { path: '/' });
+      void reply.clearCookie(COOKIE_NAME, { path: '/' });
       return { success: true };
     }
   );
@@ -237,7 +238,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
         await pool.query(
           `INSERT INTO admin_audit_log (admin_id, action, success, details, ip_address)
            VALUES ($1, 'password_change', false, $2, $3)`,
-          [adminId, { reason: 'wrong_current' }, ip]
+          [adminId, sanitizeAuditDetails({ reason: 'wrong_current' }), ip]
         );
         return reply.code(401).send({ error: 'رمز فعلی اشتباهه' });
       }
@@ -259,7 +260,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
         [adminId, ip]
       );
 
-      reply.clearCookie(COOKIE_NAME, { path: '/' });
+      void reply.clearCookie(COOKIE_NAME, { path: '/' });
       return { success: true, message: 'رمز عوض شد. لطفاً دوباره لاگین کن.' };
     }
   );

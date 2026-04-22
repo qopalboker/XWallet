@@ -17,6 +17,7 @@ import helmet from '@fastify/helmet';
 import staticPlugin from '@fastify/static';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 import authRoutes from './routes/auth.js';
 import walletRoutes from './routes/wallets.js';
@@ -59,13 +60,61 @@ export async function buildServer() {
   // self-test encryption تا مطمئن بشیم master key کار می‌کنه
   cryptoSelfTest();
 
+  const isProd = process.env.NODE_ENV === 'production';
+
   const app = Fastify({
     logger: {
       level: process.env.LOG_LEVEL ?? 'info',
-      transport: process.env.NODE_ENV === 'production' ? undefined : { target: 'pino-pretty' },
+      transport: isProd ? undefined : { target: 'pino-pretty' },
+      // فیلدهای حساس از log حذف بشن. paths از داکومنت pino:
+      //   https://getpino.io/#/docs/redaction
+      redact: {
+        paths: [
+          'req.headers.cookie',
+          'req.headers.authorization',
+          'res.headers["set-cookie"]',
+          'req.body.password',
+          'req.body.currentPassword',
+          'req.body.oldPassword',
+          'req.body.newPassword',
+          'req.body.value',          // credentials POST body
+          'req.body.mnemonic',
+          '*.password',
+          '*.token',
+          '*.mnemonic',
+        ],
+        censor: '[REDACTED]',
+      },
+      serializers: {
+        req(req: { id: string; method: string; url: string; ip?: string; admin?: { sub?: number; role?: string } }) {
+          return {
+            reqId: req.id,
+            method: req.method,
+            url: req.url,
+            ip: req.ip,
+            adminId: req.admin?.sub,
+            role: req.admin?.role,
+          };
+        },
+      },
+    },
+    // request id: از header X-Request-Id استفاده کن، در غیر این صورت UUID بساز
+    genReqId: (req): string => {
+      const fromHeader = req.headers['x-request-id'];
+      if (typeof fromHeader === 'string' && fromHeader.length > 0 && fromHeader.length <= 64) {
+        return fromHeader;
+      }
+      return randomUUID();
     },
     trustProxy: true,
     bodyLimit: 1 * 1024 * 1024, // 1MB
+    disableRequestLogging: false,
+  });
+
+  // X-Request-Id رو به response اضافه کن (برای trace توسط کلاینت)
+  app.addHook('onSend', (request, reply, payload, done) => {
+    void reply.header('x-request-id', request.id);
+    done(null, payload);
   });
 
   // ─── Security headers ───
@@ -129,7 +178,7 @@ export async function buildServer() {
     const safeMessage = statusCode < 500
       ? err.message
       : 'خطای سمت سرور';
-    reply.code(statusCode).send({ error: safeMessage });
+    void reply.code(statusCode).send({ error: safeMessage });
   });
 
   return app;

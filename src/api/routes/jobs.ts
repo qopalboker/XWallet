@@ -4,26 +4,26 @@
  *   GET    /api/jobs/:id       - جزئیات یه job
  *   POST   /api/jobs/generate  - job جدید batch generation بساز
  *   POST   /api/jobs/balance-now - یه balance check فوری trigger کن
+ *   GET    /api/queue-stats    - آمار صف‌ها
  */
 
 import type { FastifyInstance } from 'fastify';
 import { pool } from '../../db/pool.js';
-import { authGuard } from '../../auth/index.js';
 import { generationQueue, balanceQueue } from '../../queue/queues.js';
 
 export async function jobRoutes(app: FastifyInstance) {
-  app.addHook('preHandler', authGuard);
+  const authed = [app.requireAuth, app.requireNotMustChange];
 
   // ─── GET /api/jobs ───
   app.get<{
     Querystring: { page?: number; limit?: number; status?: string };
-  }>('/api/jobs', async (request) => {
+  }>('/api/jobs', { preHandler: authed }, async (request) => {
     const page = Math.max(1, Number(request.query.page ?? 1));
     const limit = Math.min(100, Math.max(1, Number(request.query.limit ?? 20)));
     const offset = (page - 1) * limit;
 
     const where: string[] = [];
-    const params: any[] = [];
+    const params: unknown[] = [];
     if (request.query.status) {
       params.push(request.query.status);
       where.push(`status = $${params.length}`);
@@ -50,15 +50,19 @@ export async function jobRoutes(app: FastifyInstance) {
   });
 
   // ─── GET /api/jobs/:id ───
-  app.get<{ Params: { id: string } }>('/api/jobs/:id', async (request, reply) => {
-    const id = Number(request.params.id);
-    const res = await pool.query(
-      `SELECT * FROM generation_jobs WHERE id = $1`,
-      [id]
-    );
-    if (res.rows.length === 0) return reply.code(404).send({ error: 'not found' });
-    return res.rows[0];
-  });
+  app.get<{ Params: { id: string } }>(
+    '/api/jobs/:id',
+    { preHandler: authed },
+    async (request, reply) => {
+      const id = Number(request.params.id);
+      const res = await pool.query(
+        `SELECT * FROM generation_jobs WHERE id = $1`,
+        [id]
+      );
+      if (res.rows.length === 0) return reply.code(404).send({ error: 'not found' });
+      return res.rows[0];
+    }
+  );
 
   // ─── POST /api/jobs/generate ───
   app.post<{
@@ -71,6 +75,7 @@ export async function jobRoutes(app: FastifyInstance) {
   }>(
     '/api/jobs/generate',
     {
+      preHandler: authed,
       schema: {
         body: {
           type: 'object',
@@ -92,7 +97,6 @@ export async function jobRoutes(app: FastifyInstance) {
         startUserId,
       } = request.body;
 
-      // اگه startUserId ندیم، از max(user_id)+1 شروع می‌کنیم
       let start = startUserId;
       if (!start) {
         const r = await pool.query<{ next: string }>(
@@ -101,7 +105,6 @@ export async function jobRoutes(app: FastifyInstance) {
         start = Number(r.rows[0].next);
       }
 
-      // چک conflict: اگه range با user_id‌های موجود تداخل داره، خطا بده
       const overlap = await pool.query<{ cnt: string }>(
         `SELECT COUNT(*)::text AS cnt FROM wallets
          WHERE user_id >= $1 AND user_id < $2`,
@@ -113,7 +116,6 @@ export async function jobRoutes(app: FastifyInstance) {
         });
       }
 
-      // DB row برای tracking
       const dbRes = await pool.query<{ id: number }>(
         `INSERT INTO generation_jobs
          (requested_by, word_count, total_count, status)
@@ -123,7 +125,6 @@ export async function jobRoutes(app: FastifyInstance) {
       );
       const jobDbId = dbRes.rows[0].id;
 
-      // BullMQ job
       const bullJob = await generationQueue.add('generate', {
         jobDbId,
         startUserId: start,
@@ -142,9 +143,9 @@ export async function jobRoutes(app: FastifyInstance) {
   );
 
   // ─── POST /api/jobs/balance-now ───
-  // Admin دکمه "چک فوری" می‌زنه
   app.post<{ Body: { priority?: 'active' | 'normal' | 'inactive' } }>(
     '/api/jobs/balance-now',
+    { preHandler: authed },
     async (request) => {
       const priority = request.body?.priority ?? 'active';
       const job = await balanceQueue.add('manual-check', { priority, batchSize: 500 });
@@ -153,7 +154,7 @@ export async function jobRoutes(app: FastifyInstance) {
   );
 
   // ─── GET /api/queue-stats ───
-  app.get('/api/queue-stats', async () => {
+  app.get('/api/queue-stats', { preHandler: authed }, async () => {
     const [genWaiting, genActive, genDone, genFailed] = await Promise.all([
       generationQueue.getWaitingCount(),
       generationQueue.getActiveCount(),

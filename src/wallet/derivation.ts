@@ -14,6 +14,7 @@ import * as ecc from 'tiny-secp256k1';
 import * as bitcoin from 'bitcoinjs-lib';
 import { HDNodeWallet, keccak256 } from 'ethers';
 import bs58check from 'bs58check';
+import { randomBytes, randomFillSync } from 'node:crypto';
 
 const bip32 = BIP32Factory(ecc);
 
@@ -42,6 +43,35 @@ export function generateMnemonic(wordCount: 12 | 24 = 12): string {
 
 export function isValidMnemonic(mnemonic: string): boolean {
   return bip39.validateMnemonic(mnemonic.trim().toLowerCase());
+}
+
+/**
+ * نسخه‌ی بهینه برای benchmark (loop داغ).
+ *
+ * entropy و یه buffer داخلی رو بعد از مصرف overwrite می‌کنیم. خود string
+ * مnemonic رو نمی‌تونیم wipe کنیم (immutable در JS) ولی reference رو رها
+ * می‌کنیم تا GC جمعش کنه. این بهترین کاری هست که در محیط ManagedJS می‌شه
+ * انجام داد.
+ */
+export interface BenchmarkMnemonicHandle {
+  mnemonic: string;
+  wipe: () => void;
+}
+
+export function generateMnemonicForBenchmark(
+  wordCount: 12 | 24 = 12
+): BenchmarkMnemonicHandle {
+  const strength = wordCount === 24 ? 256 : 128;
+  const entropy = randomBytes(strength / 8);
+  const mnemonic = bip39.entropyToMnemonic(entropy);
+
+  return {
+    mnemonic,
+    wipe(): void {
+      randomFillSync(entropy);
+      entropy.fill(0);
+    },
+  };
 }
 
 // ─────────────────────────── Single-address derivation ───────────────────────────

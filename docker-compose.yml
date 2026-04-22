@@ -1,29 +1,51 @@
+# ─────────────────────────────────────────────────────────────────────────
+# Full stack: postgres + redis + api + worker + caddy.
+#
+# استفاده:
+#   1. .env رو با مقادیر واقعی پر کن (مخصوصاً WALLET_MASTER_KEY/JWT_SECRET/
+#      COOKIE_SECRET و DOMAIN اگه TLS واقعی می‌خوای)
+#   2. docker compose up -d --build
+#   3. docker compose exec api npm run seed:admin
+#
+# اگه DOMAIN ست نباشه، Caddy به صورت پیش‌فرض روی wallet.local تو HTTPS
+# self-signed می‌شه. برای local dev، فقط api رو expose کن (caddy رو comment).
+# ─────────────────────────────────────────────────────────────────────────
+
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_DB: wallet_service
-      POSTGRES_USER: postgres
+      POSTGRES_DB: ${PG_DATABASE:-wallet_service}
+      POSTGRES_USER: ${PG_USER:-postgres}
       POSTGRES_PASSWORD: ${PG_PASSWORD:-postgres}
-    ports:
-      - "5432:5432"
+    expose:
+      - "5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./src/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
       - ./src/db/migrations/002_admins.sql:/docker-entrypoint-initdb.d/02-admins.sql:ro
       - ./src/db/migrations/003_api_credentials.sql:/docker-entrypoint-initdb.d/03-api-credentials.sql:ro
       - ./src/db/migrations/004_benchmark.sql:/docker-entrypoint-initdb.d/04-benchmark.sql:ro
+      - ./src/db/migrations/005_generation_jobs_status_check.sql:/docker-entrypoint-initdb.d/05-status-check.sql:ro
+      - ./src/db/migrations/006_addresses_next_check_at.sql:/docker-entrypoint-initdb.d/06-next-check.sql:ro
+      - ./src/db/migrations/007_api_credentials_version.sql:/docker-entrypoint-initdb.d/07-cred-version.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-postgres}"]
       interval: 5s
       timeout: 3s
       retries: 5
+    networks:
+      - backend
 
   redis:
     image: redis:7-alpine
-    command: redis-server --appendonly yes ${REDIS_PASSWORD:+--requirepass $REDIS_PASSWORD}
-    ports:
-      - "6379:6379"
+    restart: unless-stopped
+    command: >
+      redis-server --appendonly yes
+      ${REDIS_PASSWORD:+--requirepass $REDIS_PASSWORD}
+    expose:
+      - "6379"
     volumes:
       - redisdata:/data
     healthcheck:
@@ -31,7 +53,108 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    networks:
+      - backend
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: wallet-service:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PG_HOST: postgres
+      PG_PORT: 5432
+      PG_DATABASE: ${PG_DATABASE:-wallet_service}
+      PG_USER: ${PG_USER:-postgres}
+      PG_PASSWORD: ${PG_PASSWORD:-postgres}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      WALLET_MASTER_KEY: ${WALLET_MASTER_KEY:-}
+      WALLET_MASTER_KEY_V1: ${WALLET_MASTER_KEY_V1:-}
+      WALLET_MASTER_KEY_V2: ${WALLET_MASTER_KEY_V2:-}
+      JWT_SECRET: ${JWT_SECRET:-}
+      COOKIE_SECRET: ${COOKIE_SECRET:-}
+    expose:
+      - "3000"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  worker:
+    image: wallet-service:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+    command: ["node", "dist/src/worker.js"]
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PG_HOST: postgres
+      PG_PORT: 5432
+      PG_DATABASE: ${PG_DATABASE:-wallet_service}
+      PG_USER: ${PG_USER:-postgres}
+      PG_PASSWORD: ${PG_PASSWORD:-postgres}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      WALLET_MASTER_KEY: ${WALLET_MASTER_KEY:-}
+      WALLET_MASTER_KEY_V1: ${WALLET_MASTER_KEY_V1:-}
+      WALLET_MASTER_KEY_V2: ${WALLET_MASTER_KEY_V2:-}
+      JWT_SECRET: ${JWT_SECRET:-}
+      GEN_CONCURRENCY: ${GEN_CONCURRENCY:-2}
+      BALANCE_CONCURRENCY: ${BALANCE_CONCURRENCY:-3}
+      BALANCE_CHECK_INTERVAL_SEC: ${BALANCE_CHECK_INTERVAL_SEC:-30}
+      TRONGRID_API_KEYS: ${TRONGRID_API_KEYS:-}
+    networks:
+      - backend
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    environment:
+      DOMAIN: ${DOMAIN:-:80}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    networks:
+      - backend
 
 volumes:
   pgdata:
   redisdata:
+  caddydata:
+  caddyconfig:
+
+networks:
+  backend:
+    driver: bridge

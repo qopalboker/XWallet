@@ -1,0 +1,39 @@
+# Caddyfile — reverse proxy با TLS خودکار جلوی api.
+#
+# اگه دامنه داری، DOMAIN رو در .env ست کن (مثلاً wallet.example.com)
+# Caddy خودش از Let's Encrypt cert می‌گیره.
+#
+# اگه دامنه نداری و فقط می‌خوای local تست کنی، DOMAIN رو ":80" بذار
+# (HTTP بدون TLS).
+
+{$DOMAIN:wallet.local} {
+	encode zstd gzip
+
+	# request id رو از caddy منتقل کن (اگه کلاینت نفرستاد)
+	header_up X-Request-Id {http.request.uuid}
+
+	# limit body همخوان با Fastify
+	request_body {
+		max_size 1MB
+	}
+
+	# همه request ها به api می‌رن
+	reverse_proxy api:3000 {
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Real-IP {remote_host}
+
+		# health check
+		health_uri /health
+		health_interval 10s
+		health_timeout 3s
+	}
+
+	# headers امنیتی اضافه (Fastify helmet هم داره ولی double-defense)
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}

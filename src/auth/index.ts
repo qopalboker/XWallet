@@ -39,7 +39,7 @@ export async function authGuard(
   const token = request.cookies[COOKIE_NAME];
 
   if (!token) {
-    reply.code(401).send({ error: 'unauthenticated' });
+    await reply.code(401).send({ error: 'unauthenticated' });
     return;
   }
 
@@ -47,8 +47,8 @@ export async function authGuard(
     const payload = await verifyToken(token);
     request.admin = payload;
   } catch {
-    reply.clearCookie(COOKIE_NAME, { path: '/' });
-    reply.code(401).send({ error: 'invalid_token' });
+    void reply.clearCookie(COOKIE_NAME, { path: '/' });
+    await reply.code(401).send({ error: 'invalid_token' });
   }
 }
 
@@ -57,7 +57,7 @@ export async function requireNotMustChange(
   reply: FastifyReply
 ): Promise<void> {
   if (request.admin?.mustChangePassword) {
-    reply.code(403).send({
+    await reply.code(403).send({
       error: 'must_change_password',
       message: 'باید اول رمز پیش‌فرض رو عوض کنی',
     });
@@ -67,7 +67,7 @@ export async function requireNotMustChange(
 export function requireRole(role: AdminRole) {
   return async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     if (request.admin?.role !== role) {
-      reply.code(403).send({ error: 'forbidden' });
+      await reply.code(403).send({ error: 'forbidden' });
     }
   };
 }

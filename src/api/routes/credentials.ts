@@ -8,7 +8,6 @@
  */
 
 import type { FastifyInstance } from 'fastify';
-import { authGuard } from '../../auth/index.js';
 import {
   listCredentials,
   addCredential,
@@ -21,11 +20,12 @@ import {
 const VALID_PROVIDERS: Provider[] = ['trongrid', 'eth_rpc', 'btc_api'];
 
 export async function credentialRoutes(app: FastifyInstance) {
-  app.addHook('preHandler', authGuard);
+  const authed = [app.requireAuth, app.requireNotMustChange];
 
   // ─── GET /api/credentials ───
   app.get<{ Querystring: { provider?: string } }>(
     '/api/credentials',
+    { preHandler: authed },
     async (request) => {
       const provider = request.query.provider as Provider | undefined;
       if (provider && !VALID_PROVIDERS.includes(provider)) {
@@ -42,6 +42,7 @@ export async function credentialRoutes(app: FastifyInstance) {
   }>(
     '/api/credentials',
     {
+      preHandler: authed,
       schema: {
         body: {
           type: 'object',
@@ -69,6 +70,7 @@ export async function credentialRoutes(app: FastifyInstance) {
   // ─── DELETE /api/credentials/:id ───
   app.delete<{ Params: { id: string } }>(
     '/api/credentials/:id',
+    { preHandler: authed },
     async (request) => {
       await deleteCredential(Number(request.params.id));
       return { ok: true };
@@ -78,6 +80,7 @@ export async function credentialRoutes(app: FastifyInstance) {
   // ─── POST /api/credentials/:id/toggle ───
   app.post<{ Params: { id: string }; Body: { active: boolean } }>(
     '/api/credentials/:id/toggle',
+    { preHandler: authed },
     async (request) => {
       await setActive(Number(request.params.id), request.body.active);
       return { ok: true };
@@ -87,6 +90,7 @@ export async function credentialRoutes(app: FastifyInstance) {
   // ─── POST /api/credentials/:id/unblock ───
   app.post<{ Params: { id: string } }>(
     '/api/credentials/:id/unblock',
+    { preHandler: authed },
     async (request) => {
       await clearRateLimit(Number(request.params.id));
       return { ok: true };

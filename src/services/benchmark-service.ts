@@ -4,19 +4,27 @@
  * هر run:
  *   - یه target_count مشخص داره (حداکثر MAX_TARGET)
  *   - mnemonic random می‌سازه، آدرس derive می‌کنه، موجودی چک می‌کنه
+ *   - mnemonic بعد از مصرف به‌صورت best-effort overwrite می‌شه
+ *     (true wipe در JS برای string ممکن نیست، ولی entropy/seed buffer هایی
+ *     که ساختیم رو با randomFillSync پاک می‌کنیم)
+ *   - اگه hit شد (ریاضیاً نخواهد شد)، فقط آدرس و موجودی ثبت می‌شه با jsonb
+ *     concat (append-only، نه overwrite کل آرایه)
  *   - mnemonic هرگز ذخیره نمی‌شه
- *   - اگه hit شد (ریاضیاً نخواهد شد)، فقط آدرس و موجودی ثبت می‌شه
- *   - در پایان یه گزارش آمار می‌ده
  *
  * هم‌زمان فقط یه run می‌تونه اجرا بشه.
  */
 
+import { randomFillSync } from 'node:crypto';
 import { pool } from '../db/pool.js';
-import { generateMnemonic, deriveMany, type Chain, type DerivedAddress } from '../wallet/derivation.js';
+import {
+  generateMnemonicForBenchmark,
+  deriveMany,
+  type Chain,
+  type DerivedAddress,
+} from '../wallet/derivation.js';
 import { fetchBalancesByChain } from '../balance/cache.js';
 
 // ═════════════ HARD LIMITS ═════════════
-// این‌ها تو کد hardcoded هست و از env/پنل قابل تغییر نیست.
 export const MAX_TARGET = 100_000;
 export const BATCH_SIZE = 20;
 export const BATCH_DELAY_MS = 500;
@@ -46,9 +54,8 @@ export async function startBenchmark(opts: StartOptions): Promise<number> {
     throw new Error('یه benchmark در حال اجراست، اول صبر کن تموم بشه یا stopش کن');
   }
 
-  // اعمال HARD LIMITS
   const target = Math.min(MAX_TARGET, Math.max(1, opts.targetCount));
-  const wordCount = (opts.wordCount === 24 ? 24 : 12) as 12 | 24;
+  const wordCount: 12 | 24 = opts.wordCount === 24 ? 24 : 12;
   const n = Math.max(1, Math.min(10, opts.addressesPerMnemonic));
   const chains = opts.chains.filter((c) => ['BTC', 'ETH', 'TRON'].includes(c));
 
@@ -67,21 +74,29 @@ export async function startBenchmark(opts: StartOptions): Promise<number> {
   currentRunId = runId;
   stopRequested = false;
 
-  // run رو async start می‌کنیم
-  runLoop(runId, target, wordCount, n, chains).catch(async (e) => {
-    console.error('[benchmark] error:', e);
-    await pool.query(
-      `UPDATE benchmark_runs
-       SET status = 'failed', error = $1, completed_at = NOW()
-       WHERE id = $2`,
-      [(e as Error).message, runId]
-    );
-  }).finally(() => {
-    if (currentRunId === runId) currentRunId = null;
-    stopRequested = false;
-  });
+  runLoop(runId, target, wordCount, n, chains)
+    .catch(async (e) => {
+      console.error('[benchmark] error:', e);
+      await pool.query(
+        `UPDATE benchmark_runs
+         SET status = 'failed', error = $1, completed_at = NOW()
+         WHERE id = $2`,
+        [(e as Error).message, runId]
+      );
+    })
+    .finally(() => {
+      if (currentRunId === runId) currentRunId = null;
+      stopRequested = false;
+    });
 
   return runId;
+}
+
+interface NewHit {
+  chain: string;
+  address: string;
+  native: string;
+  usdt: string;
 }
 
 async function runLoop(
@@ -93,24 +108,27 @@ async function runLoop(
 ): Promise<void> {
   const startTime = Date.now();
   let checked = 0;
-  let hits = 0;
-  const hitsInfo: Array<{ chain: string; address: string; native: string; usdt: string }> = [];
+  let totalHits = 0;
 
   while (checked < target && !stopRequested) {
     const remaining = target - checked;
     const batchSize = Math.min(BATCH_SIZE, remaining);
 
-    // بساز batch
     const batch: Array<{ addresses: DerivedAddress[] }> = [];
+
     for (let i = 0; i < batchSize; i++) {
-      const mnemonic = generateMnemonic(wordCount);
-      // mnemonic فقط تو این scope زنده‌ست، بعد از loop GC میشه
-      const addresses = await deriveMany(
-        mnemonic,
-        chains.map((chain) => ({ chain, fromIndex: 0, count: n }))
-      );
-      batch.push({ addresses });
-      // نکته: mnemonic رو جایی save نمی‌کنیم — قبل از این خط فراموش می‌شه
+      // entropy + mnemonic در یه helper داخلی نگه‌داشته می‌شه
+      // و بعد از derive، entropy/seed buffer ها overwrite می‌شن.
+      const handle = generateMnemonicForBenchmark(wordCount);
+      try {
+        const addresses = await deriveMany(
+          handle.mnemonic,
+          chains.map((chain) => ({ chain, fromIndex: 0, count: n }))
+        );
+        batch.push({ addresses });
+      } finally {
+        handle.wipe();
+      }
     }
 
     // چک موجودی
@@ -121,25 +139,31 @@ async function runLoop(
 
     const balances = await fetchBalancesByChain(byChain.BTC, byChain.ETH, byChain.TRON);
 
-    // پردازش
+    // پردازش — فقط hit های جدید این batch
+    const newHits: NewHit[] = [];
     for (const item of batch) {
       for (const addr of item.addresses) {
-        let native = 0n, usdt = 0n;
+        let native = 0n;
+        let usdt = 0n;
         if (addr.chain === 'BTC') {
           const b = balances.btc.get(addr.address);
           if (b) native = b.sats;
         } else if (addr.chain === 'ETH') {
           const b = balances.eth.get(addr.address);
-          if (b) { native = b.eth; usdt = b.usdt; }
+          if (b) {
+            native = b.eth;
+            usdt = b.usdt;
+          }
         } else if (addr.chain === 'TRON') {
           const b = balances.tron.get(addr.address);
-          if (b) { native = b.trx; usdt = b.usdt; }
+          if (b) {
+            native = b.trx;
+            usdt = b.usdt;
+          }
         }
 
         if (native > 0n || usdt > 0n) {
-          hits++;
-          // فقط آدرس و موجودی. mnemonic نگه نمی‌داریم.
-          hitsInfo.push({
+          newHits.push({
             chain: addr.chain,
             address: addr.address,
             native: native.toString(),
@@ -150,20 +174,30 @@ async function runLoop(
     }
 
     checked += batchSize;
+    totalHits += newHits.length;
 
-    // آپدیت progress
     const elapsed = (Date.now() - startTime) / 1000;
     const rate = checked / Math.max(1, elapsed);
 
+    // Progress update — همیشه. سبک.
     await pool.query(
       `UPDATE benchmark_runs
        SET checked_count = $1,
            hit_count = $2,
-           hits_info = $3::jsonb,
-           avg_rate_per_sec = $4
-       WHERE id = $5`,
-      [checked, hits, JSON.stringify(hitsInfo), rate.toFixed(2), runId]
+           avg_rate_per_sec = $3
+       WHERE id = $4`,
+      [checked, totalHits, rate.toFixed(2), runId]
     );
+
+    // Hits update — فقط وقتی hit جدید داریم. jsonb concat نه overwrite.
+    if (newHits.length > 0) {
+      await pool.query(
+        `UPDATE benchmark_runs
+           SET hits_info = hits_info || $1::jsonb
+         WHERE id = $2`,
+        [JSON.stringify(newHits), runId]
+      );
+    }
 
     if (BATCH_DELAY_MS > 0 && checked < target && !stopRequested) {
       await new Promise((r) => setTimeout(r, BATCH_DELAY_MS));
@@ -182,7 +216,7 @@ async function runLoop(
   );
 
   console.log(
-    `[benchmark] run #${runId} ${finalStatus}: checked=${checked}, hits=${hits}, duration=${(duration/1000).toFixed(1)}s`
+    `[benchmark] run #${runId} ${finalStatus}: checked=${checked}, hits=${totalHits}, duration=${(duration / 1000).toFixed(1)}s`
   );
 }
 
@@ -195,4 +229,10 @@ export async function cleanupOnStartup(): Promise<void> {
          completed_at = NOW()
      WHERE status IN ('pending', 'running')`
   );
+}
+
+// helper برای wipe کردن یه buffer (اگه بعداً جای دیگه نیاز شد)
+export function secureWipe(buf: Buffer): void {
+  randomFillSync(buf);
+  buf.fill(0);
 }

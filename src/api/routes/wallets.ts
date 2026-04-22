@@ -13,9 +13,11 @@ import {
   createWallet,
   getNewDepositAddress,
   revealMnemonic,
+  WalletNotFoundError,
 } from '../../services/wallet-service.js';
 import type { Chain } from '../../wallet/derivation.js';
 import { verifyPassword } from '../../auth/passwords.js';
+import { sanitizeAuditDetails } from '../../util/sanitize.js';
 
 export default async function walletRoutes(fastify: FastifyInstance) {
   const authed = [fastify.requireAuth, fastify.requireNotMustChange];
@@ -135,7 +137,12 @@ export default async function walletRoutes(fastify: FastifyInstance) {
           `INSERT INTO admin_audit_log
              (admin_id, action, target_type, target_id, success, details, ip_address)
            VALUES ($1, 'create_wallet', 'wallet', $2, true, $3, $4)`,
-          [req.admin!.sub, result.walletId, { user_id: req.body.user_id }, req.ip]
+          [
+            req.admin!.sub,
+            result.walletId,
+            sanitizeAuditDetails({ user_id: req.body.user_id }),
+            req.ip,
+          ]
         );
         return { wallet_id: result.walletId, addresses: result.addresses };
       } catch (e: any) {
@@ -168,8 +175,15 @@ export default async function walletRoutes(fastify: FastifyInstance) {
       if (!Number.isInteger(id) || id < 1) {
         return reply.code(400).send({ error: 'invalid id' });
       }
-      const addr = await getNewDepositAddress(id, req.body.chain);
-      return { address: addr };
+      try {
+        const addr = await getNewDepositAddress(id, req.body.chain);
+        return { address: addr };
+      } catch (e) {
+        if (e instanceof WalletNotFoundError) {
+          return reply.code(404).send({ error: e.code });
+        }
+        throw e;
+      }
     }
   );
 
@@ -221,7 +235,7 @@ export default async function walletRoutes(fastify: FastifyInstance) {
           `INSERT INTO admin_audit_log
              (admin_id, action, target_type, target_id, success, details, ip_address, user_agent)
            VALUES ($1, 'reveal_mnemonic', 'wallet', $2, false, $3, $4, $5)`,
-          [adminId, id, { reason: 'wrong_password' }, req.ip, ua]
+          [adminId, id, sanitizeAuditDetails({ reason: 'wrong_password' }), req.ip, ua]
         );
         return reply.code(401).send({ error: 'رمز اشتباهه' });
       }
@@ -248,6 +262,9 @@ export default async function walletRoutes(fastify: FastifyInstance) {
            VALUES ($1, $2, false, $3, $4)`,
           [id, adminId, req.ip, ua]
         );
+        if (e instanceof WalletNotFoundError) {
+          return reply.code(404).send({ error: e.code });
+        }
         throw e;
       }
     }

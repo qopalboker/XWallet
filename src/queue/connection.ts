@@ -22,4 +22,5 @@ export function createQueueConnection(): Redis {
 export const QUEUE_NAMES = {
   GENERATION: 'wallet-generation',
   BALANCE_CHECK: 'balance-check',
+  CLEANUP: 'cleanup',
 } as const;
