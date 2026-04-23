@@ -19,6 +19,7 @@ import { pool } from '../db/pool.js';
 import {
   generateMnemonic,
   deriveMany,
+  deriveBtcAllTypes,
   isValidMnemonic,
   normalizeMnemonic,
   type Chain,
@@ -30,8 +31,14 @@ import {
   maybeReEncrypt,
   type EncryptedMnemonic,
 } from '../crypto/aes.js';
+import { batchBtcBalances } from '../balance/btc.js';
 
 const ALL_CHAINS: Chain[] = ['BTC', 'ETH', 'TRON'];
+
+// سقف scan برای import — تا این تعداد index از هر نوع BTC (legacy/p2sh)
+// آدرس می‌سازیم و بالانس می‌گیریم. اگه بیشتر از این خواست، کاربر باید
+// initial_address_count بزرگ‌تر بفرسته.
+const BTC_LEGACY_SCAN_MIN = 5;
 
 export class WalletNotFoundError extends Error {
   readonly code = 'WALLET_NOT_FOUND';
@@ -79,6 +86,17 @@ export interface ImportWalletOptions {
   userId: number;
   mnemonic: string;
   initialAddressCount?: number;
+  // اگه true باشه، legacy (m/44') و p2sh (m/49') BTC آدرس‌های اولیه رو
+  // هم scan می‌کنه و اگه موجودی داشته باشن به DB می‌افزاد. default: true.
+  scanLegacyBtc?: boolean;
+}
+
+export interface ImportWalletResult extends CreateWalletResult {
+  legacyBtc: {
+    scanned: number;         // تعداد کل آدرس‌های legacy+p2sh که چک شدن
+    detected: DerivedAddress[]; // اون‌هایی که موجودی داشتن (قبل از persist)
+    skipped?: boolean;       // اگه scan به هر دلیلی انجام نشد (network error و …)
+  };
 }
 
 /**
@@ -88,11 +106,24 @@ export interface ImportWalletOptions {
  *   - NFKD + trim + collapse whitespace + lowercase (normalizeMnemonic)
  *   - تعداد کلمات: فقط 12 یا 24
  *   - checksum + wordlist (bip39.validateMnemonic)
+ *
+ * BTC legacy/p2sh scan:
+ *   کاربرانی که از Trust قدیمی، Electrum legacy یا هر ولت pre-2020 دیگه
+ *   mnemonic میارن ممکنه موجودی‌شون روی آدرس‌های m/44' (1…) یا m/49' (3…)
+ *   باشه. اگه ما فقط m/84' (bc1…) رو چک کنیم، کاربر فکر می‌کنه موجودی‌ش
+ *   گم شده. این scan اون دو نوع آدرس رو هم می‌سازه و اگه non-zero balance
+ *   داشته باشن، به DB اضافه می‌کنه. default BTC برای deposit همون segwit
+ *   می‌مونه.
  */
 export async function importWallet(
   opts: ImportWalletOptions
-): Promise<CreateWalletResult> {
-  const { userId, mnemonic: raw, initialAddressCount = 1 } = opts;
+): Promise<ImportWalletResult> {
+  const {
+    userId,
+    mnemonic: raw,
+    initialAddressCount = 1,
+    scanLegacyBtc = true,
+  } = opts;
 
   if (initialAddressCount < 1 || initialAddressCount > 100) {
     throw new Error('initialAddressCount باید بین 1 و 100 باشه');
@@ -107,7 +138,90 @@ export async function importWallet(
     throw new InvalidMnemonicError('mnemonic نامعتبره (checksum یا wordlist)');
   }
 
-  return persistWallet(userId, normalized, words, initialAddressCount);
+  const created = await persistWallet(userId, normalized, words, initialAddressCount);
+
+  if (!scanLegacyBtc) {
+    return { ...created, legacyBtc: { scanned: 0, detected: [], skipped: true } };
+  }
+
+  const scanCount = Math.max(initialAddressCount, BTC_LEGACY_SCAN_MIN);
+  const scanResult = await scanAndPersistLegacyBtc(created.walletId, normalized, scanCount);
+
+  if (scanResult.detected.length > 0) {
+    created.addresses.push(...scanResult.detected);
+  }
+
+  return { ...created, legacyBtc: scanResult };
+}
+
+/**
+ * Legacy (m/44') و P2SH (m/49') BTC آدرس‌ها رو از index 0 تا count می‌سازه،
+ * موجودی رو از mempool.space می‌گیره، و اون‌هایی که non-zero یا history
+ * داشتن (tx_count > 0) رو به addresses جدول اضافه می‌کنه.
+ *
+ * best-effort: اگه mempool.space جواب نداد، scan رو skip می‌کنیم. ولت
+ * segwit موجود دست‌نخورده می‌مونه.
+ */
+async function scanAndPersistLegacyBtc(
+  walletId: number,
+  mnemonic: string,
+  count: number
+): Promise<ImportWalletResult['legacyBtc']> {
+  const all = await deriveBtcAllTypes(mnemonic, 0, count);
+  const legacyAndP2sh = all.filter(
+    (a) => a.btcAddressType === 'legacy' || a.btcAddressType === 'p2sh'
+  );
+  if (legacyAndP2sh.length === 0) {
+    return { scanned: 0, detected: [] };
+  }
+
+  let balances;
+  try {
+    balances = await batchBtcBalances(legacyAndP2sh.map((a) => a.address));
+  } catch (e) {
+    console.error(`[wallet] legacy BTC scan failed for wallet=${walletId}:`, (e as Error).message);
+    return { scanned: legacyAndP2sh.length, detected: [], skipped: true };
+  }
+
+  const byAddr = new Map(balances.map((b) => [b.address, b]));
+  const detected = legacyAndP2sh.filter((a) => {
+    const b = byAddr.get(a.address);
+    // آدرسی که یا موجودی داره یا قبلاً تراکنش داشته رو نگه می‌داریم.
+    return b && (b.sats > 0n || b.txCount > 0);
+  });
+
+  if (detected.length === 0) {
+    return { scanned: legacyAndP2sh.length, detected: [] };
+  }
+
+  // persist detected addresses (batch INSERT)
+  const values: string[] = [];
+  const params: unknown[] = [];
+  let p = 1;
+  for (const a of detected) {
+    const bal = byAddr.get(a.address)!;
+    values.push(`($${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++})`);
+    params.push(
+      walletId,
+      a.chain,
+      a.index,
+      a.path,
+      a.address,
+      a.btcAddressType,
+      bal.sats.toString(),
+      bal.txCount
+    );
+  }
+  await pool.query(
+    `INSERT INTO addresses
+       (wallet_id, chain, derivation_index, derivation_path, address, address_type,
+        native_balance, tx_count)
+     VALUES ${values.join(', ')}
+     ON CONFLICT DO NOTHING`,
+    params
+  );
+
+  return { scanned: legacyAndP2sh.length, detected };
 }
 
 async function persistWallet(
@@ -142,11 +256,19 @@ async function persistWallet(
     const params: unknown[] = [];
     let p = 1;
     for (const a of addresses) {
-      values.push(`($${p++}, $${p++}, $${p++}, $${p++}, $${p++})`);
-      params.push(walletId, a.chain, a.index, a.path, a.address);
+      values.push(`($${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++})`);
+      params.push(
+        walletId,
+        a.chain,
+        a.index,
+        a.path,
+        a.address,
+        a.chain === 'BTC' ? (a.btcAddressType ?? 'segwit') : null
+      );
     }
     await client.query(
-      `INSERT INTO addresses (wallet_id, chain, derivation_index, derivation_path, address)
+      `INSERT INTO addresses
+         (wallet_id, chain, derivation_index, derivation_path, address, address_type)
        VALUES ${values.join(', ')}`,
       params
     );
@@ -236,9 +358,17 @@ export async function getNewDepositAddress(
 
   // INSERT خارج از tx (single statement، خودش atomic هست)
   await pool.query(
-    `INSERT INTO addresses (wallet_id, chain, derivation_index, derivation_path, address)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [walletId, derived.chain, derived.index, derived.path, derived.address]
+    `INSERT INTO addresses
+       (wallet_id, chain, derivation_index, derivation_path, address, address_type)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [
+      walletId,
+      derived.chain,
+      derived.index,
+      derived.path,
+      derived.address,
+      derived.chain === 'BTC' ? (derived.btcAddressType ?? 'segwit') : null,
+    ]
   );
 
   // lazy migration در پس‌زمینه — منتظر نمی‌مونیم

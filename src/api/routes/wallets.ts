@@ -157,7 +157,12 @@ export default async function walletRoutes(fastify: FastifyInstance) {
 
   // POST /import (import existing wallet from user-provided mnemonic)
   fastify.post<{
-    Body: { user_id: number; mnemonic: string; initial_address_count?: number };
+    Body: {
+      user_id: number;
+      mnemonic: string;
+      initial_address_count?: number;
+      scan_legacy_btc?: boolean;
+    };
   }>(
     '/import',
     {
@@ -170,6 +175,7 @@ export default async function walletRoutes(fastify: FastifyInstance) {
             user_id: { type: 'integer', minimum: 1 },
             mnemonic: { type: 'string', minLength: 1, maxLength: 1000 },
             initial_address_count: { type: 'integer', minimum: 1, maximum: 100 },
+            scan_legacy_btc: { type: 'boolean' },
           },
         },
       },
@@ -180,6 +186,7 @@ export default async function walletRoutes(fastify: FastifyInstance) {
           userId: req.body.user_id,
           mnemonic: req.body.mnemonic,
           initialAddressCount: req.body.initial_address_count ?? 1,
+          scanLegacyBtc: req.body.scan_legacy_btc ?? true,
         });
         await pool.query(
           `INSERT INTO admin_audit_log
@@ -188,11 +195,29 @@ export default async function walletRoutes(fastify: FastifyInstance) {
           [
             req.admin!.sub,
             result.walletId,
-            sanitizeAuditDetails({ user_id: req.body.user_id }),
+            sanitizeAuditDetails({
+              user_id: req.body.user_id,
+              legacy_btc_detected: result.legacyBtc.detected.length,
+              legacy_btc_scanned: result.legacyBtc.scanned,
+            }),
             req.ip,
           ]
         );
-        return { wallet_id: result.walletId, addresses: result.addresses };
+        return {
+          wallet_id: result.walletId,
+          addresses: result.addresses,
+          legacy_btc: {
+            scanned: result.legacyBtc.scanned,
+            detected: result.legacyBtc.detected.map((a) => ({
+              chain: a.chain,
+              index: a.index,
+              path: a.path,
+              address: a.address,
+              address_type: a.btcAddressType,
+            })),
+            skipped: result.legacyBtc.skipped ?? false,
+          },
+        };
       } catch (e: any) {
         if (e instanceof InvalidMnemonicError) {
           return reply.code(e.statusCode).send({ error: e.code, message: e.message });

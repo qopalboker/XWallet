@@ -19,8 +19,22 @@ import { randomBytes, randomFillSync } from 'node:crypto';
 const bip32 = BIP32Factory(ecc);
 
 // ─── Derivation paths (Trust Wallet standard) ───
+//
+// BTC: پیش‌فرض Native SegWit هست (m/84') — هم‌راستا با Trust Wallet و
+// MetaMask امروزی. ولی برای import از ولت‌های قدیمی‌تر (Trust قدیم، Electrum
+// legacy، Bitcoin Core قدیمی، …) باید Legacy و P2SH-wrapped SegWit هم چک
+// بشن وگرنه کاربر فکر می‌کنه موجودی قدیمی‌ش گم شده.
+export const BTC_PATHS = {
+  legacy: (i: number) => `m/44'/0'/0'/0/${i}`,  // P2PKH (1…)
+  p2sh:   (i: number) => `m/49'/0'/0'/0/${i}`,  // P2SH-P2WPKH (3…)
+  segwit: (i: number) => `m/84'/0'/0'/0/${i}`,  // Native SegWit / P2WPKH (bc1…) — default
+} as const;
+
+export type BtcAddressType = keyof typeof BTC_PATHS;
+export const BTC_ADDRESS_TYPES = ['segwit', 'p2sh', 'legacy'] as const satisfies readonly BtcAddressType[];
+
 export const PATHS = {
-  BTC: (i: number)  => `m/84'/0'/0'/0/${i}`,    // Native SegWit (bc1…)
+  BTC: BTC_PATHS.segwit,                        // default: Native SegWit
   ETH: (i: number)  => `m/44'/60'/0'/0/${i}`,   // Ethereum (+ ERC-20)
   TRON: (i: number) => `m/44'/195'/0'/0/${i}`,  // TRON (+ TRC-20)
 } as const;
@@ -32,6 +46,8 @@ export interface DerivedAddress {
   index: number;
   path: string;
   address: string;
+  // فقط برای chain='BTC' مقدار داره. default = 'segwit'.
+  btcAddressType?: BtcAddressType;
 }
 
 // ─────────────────────────── Mnemonic ───────────────────────────
@@ -154,18 +170,12 @@ function deriveFromRoot(
   chain: Chain,
   index: number,
 ): DerivedAddress {
+  if (chain === 'BTC') return deriveBtcFromRoot(root, 'segwit', index);
+
   const path = PATHS[chain](index);
   const node = root.derivePath(path);
 
   switch (chain) {
-    case 'BTC': {
-      const { address } = bitcoin.payments.p2wpkh({
-        pubkey: Buffer.from(node.publicKey),
-        network: bitcoin.networks.bitcoin,
-      });
-      return { chain, index, path, address: address! };
-    }
-
     case 'ETH': {
       // BIP32 قطعی‌ست، پس نتیجه دقیقاً برابر MetaMask/Trust Wallet می‌شه.
       // getAddress از ethers همون EIP-55 checksum رو اعمال می‌کنه.
@@ -182,6 +192,65 @@ function deriveFromRoot(
       return { chain, index, path, address: bs58check.encode(payload) };
     }
   }
+}
+
+function deriveBtcFromRoot(
+  root: BIP32Interface,
+  type: BtcAddressType,
+  index: number
+): DerivedAddress {
+  const path = BTC_PATHS[type](index);
+  const node = root.derivePath(path);
+  const pubkey = Buffer.from(node.publicKey);
+  const network = bitcoin.networks.bitcoin;
+
+  let address: string | undefined;
+  switch (type) {
+    case 'legacy': {
+      address = bitcoin.payments.p2pkh({ pubkey, network }).address;
+      break;
+    }
+    case 'p2sh': {
+      const redeem = bitcoin.payments.p2wpkh({ pubkey, network });
+      address = bitcoin.payments.p2sh({ redeem, network }).address;
+      break;
+    }
+    case 'segwit': {
+      address = bitcoin.payments.p2wpkh({ pubkey, network }).address;
+      break;
+    }
+  }
+  if (!address) throw new Error(`BTC address derivation failed for type=${type}`);
+
+  return { chain: 'BTC', index, path, address, btcAddressType: type };
+}
+
+/**
+ * برای import و balance scan: هر ۳ نوع آدرس BTC (legacy, p2sh, segwit) رو
+ * از یه mnemonic می‌سازه. یه بار seed → root parse می‌شه (PBKDF2 گرون)
+ * و بقیه derivation سریع از root میاد.
+ *
+ * مثال: count=5 → 15 آدرس (۵ × ۳ نوع) می‌ده.
+ */
+export async function deriveBtcAllTypes(
+  mnemonic: string,
+  fromIndex: number,
+  count: number,
+  passphrase: string = ''
+): Promise<DerivedAddress[]> {
+  if (count < 0) throw new Error('count نباید منفی باشه');
+  if (count === 0) return [];
+
+  const seed = await bip39.mnemonicToSeed(mnemonic, passphrase);
+  const root = bip32.fromSeed(seed);
+
+  const results: DerivedAddress[] = [];
+  for (const type of BTC_ADDRESS_TYPES) {
+    for (let i = 0; i < count; i++) {
+      results.push(deriveBtcFromRoot(root, type, fromIndex + i));
+    }
+  }
+  return results;
 }
 
 function keccakLast20Hex(compressedPubKey: Uint8Array): string {
