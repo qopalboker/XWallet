@@ -4,11 +4,346 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Wallet Admin Panel</title>
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('theme') || 'dark-2026';
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (_) {
+        document.documentElement.setAttribute('data-theme', 'dark-2026');
+      }
+    })();
+  </script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/vue@3.4.21/dist/vue.global.prod.js"></script>
   <style>
-    * { font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }
-    .mono { font-family: 'SF Mono', Menlo, Consolas, monospace; }
+    * { font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    .mono { font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace; font-feature-settings: 'ss01', 'cv11'; }
+
+    /* ---------- Dark 2026 theme ---------- */
+    html[data-theme="dark-2026"] {
+      color-scheme: dark;
+      --bg-1: #070811;
+      --bg-2: #0c0f1e;
+      --surface: rgba(22, 26, 42, 0.66);
+      --surface-solid: #141827;
+      --surface-2: rgba(34, 40, 62, 0.75);
+      --surface-hover: rgba(50, 58, 90, 0.55);
+      --border: rgba(148, 158, 210, 0.08);
+      --border-strong: rgba(148, 158, 210, 0.18);
+      --text: #edf0fa;
+      --text-muted: #9aa3be;
+      --text-faint: #6b7292;
+      --accent: #8b5cf6;
+      --accent-2: #22d3ee;
+      --accent-hover: #a47dff;
+      --accent-soft: rgba(139, 92, 246, 0.14);
+      --accent-ring: rgba(139, 92, 246, 0.32);
+      --blue: #60a5fa;
+      --blue-soft: rgba(96, 165, 250, 0.14);
+      --emerald: #34d399;
+      --emerald-soft: rgba(52, 211, 153, 0.14);
+      --amber: #fbbf24;
+      --amber-soft: rgba(251, 191, 36, 0.14);
+      --red: #f87171;
+      --red-soft: rgba(248, 113, 113, 0.14);
+      --indigo: #818cf8;
+      --sky: #38bdf8;
+      --glow-accent: 0 8px 32px -10px rgba(139, 92, 246, 0.55), 0 0 0 1px rgba(139, 92, 246, 0.28);
+      --glow-emerald: 0 8px 32px -10px rgba(52, 211, 153, 0.55), 0 0 0 1px rgba(52, 211, 153, 0.28);
+      --glow-red: 0 8px 32px -10px rgba(248, 113, 113, 0.55), 0 0 0 1px rgba(248, 113, 113, 0.30);
+      --glow-indigo: 0 8px 32px -10px rgba(129, 140, 248, 0.55), 0 0 0 1px rgba(129, 140, 248, 0.28);
+      --shadow-glass: 0 20px 60px -24px rgba(0, 0, 0, 0.65), 0 1px 0 0 rgba(255, 255, 255, 0.04) inset;
+      --ease: cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    /* Animated ambient background */
+    html[data-theme="dark-2026"] body {
+      background:
+        radial-gradient(1200px 600px at 85% -10%, rgba(139, 92, 246, 0.22), transparent 60%),
+        radial-gradient(900px 500px at -10% 10%, rgba(34, 211, 238, 0.14), transparent 65%),
+        radial-gradient(800px 500px at 50% 110%, rgba(52, 211, 153, 0.08), transparent 60%),
+        linear-gradient(180deg, var(--bg-1) 0%, var(--bg-2) 100%);
+      background-attachment: fixed;
+      color: var(--text);
+    }
+    html[data-theme="dark-2026"] body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        radial-gradient(1px 1px at 20% 30%, rgba(255,255,255,0.25), transparent 50%),
+        radial-gradient(1px 1px at 70% 80%, rgba(255,255,255,0.18), transparent 50%),
+        radial-gradient(1px 1px at 40% 70%, rgba(255,255,255,0.22), transparent 50%),
+        radial-gradient(1px 1px at 85% 40%, rgba(255,255,255,0.18), transparent 50%),
+        radial-gradient(1px 1px at 15% 85%, rgba(255,255,255,0.20), transparent 50%);
+      opacity: 0.35;
+      mix-blend-mode: screen;
+      animation: drift 28s linear infinite;
+    }
+    @keyframes drift {
+      0%   { transform: translate3d(0, 0, 0); }
+      50%  { transform: translate3d(-10px, -12px, 0); }
+      100% { transform: translate3d(0, 0, 0); }
+    }
+
+    /* Surface overrides */
+    html[data-theme="dark-2026"] .bg-white {
+      background: var(--surface);
+      backdrop-filter: blur(28px) saturate(1.4);
+      -webkit-backdrop-filter: blur(28px) saturate(1.4);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-glass);
+      color: var(--text);
+    }
+    html[data-theme="dark-2026"] .bg-slate-50 { background: rgba(255, 255, 255, 0.028); }
+    html[data-theme="dark-2026"] .bg-slate-100 { background: rgba(255, 255, 255, 0.05); color: var(--text); }
+    html[data-theme="dark-2026"] .bg-slate-200 { background: rgba(255, 255, 255, 0.07); }
+    html[data-theme="dark-2026"] aside.bg-slate-900 {
+      background:
+        linear-gradient(180deg, rgba(12, 15, 30, 0.92), rgba(18, 22, 44, 0.88)),
+        radial-gradient(400px 300px at 50% 0%, rgba(139, 92, 246, 0.18), transparent 60%);
+      border-left: 1px solid var(--border);
+      backdrop-filter: blur(24px);
+      -webkit-backdrop-filter: blur(24px);
+    }
+    html[data-theme="dark-2026"] .bg-slate-800 {
+      background: linear-gradient(135deg, var(--accent-soft), rgba(34, 211, 238, 0.08));
+      color: var(--text);
+      box-shadow: inset 0 0 0 1px rgba(139, 92, 246, 0.28);
+    }
+    html[data-theme="dark-2026"] .hover\:bg-slate-800:hover { background: rgba(255, 255, 255, 0.04); }
+    html[data-theme="dark-2026"] .hover\:bg-slate-50:hover { background: rgba(139, 92, 246, 0.06); }
+    html[data-theme="dark-2026"] .hover\:bg-emerald-700:hover { filter: brightness(1.12); }
+    html[data-theme="dark-2026"] .hover\:bg-red-700:hover { filter: brightness(1.12); }
+
+    /* Text overrides */
+    html[data-theme="dark-2026"] .text-white { color: var(--text); }
+    html[data-theme="dark-2026"] .text-slate-900 { color: var(--text); }
+    html[data-theme="dark-2026"] .text-slate-600 { color: var(--text-muted); }
+    html[data-theme="dark-2026"] .text-slate-500 { color: var(--text-muted); }
+    html[data-theme="dark-2026"] .text-slate-400 { color: var(--text-faint); }
+    html[data-theme="dark-2026"] .text-slate-300 { color: var(--text-muted); }
+
+    /* Borders */
+    html[data-theme="dark-2026"] .border,
+    html[data-theme="dark-2026"] .border-b,
+    html[data-theme="dark-2026"] .border-t { border-color: var(--border-strong); }
+    html[data-theme="dark-2026"] .border-slate-700 { border-color: var(--border); }
+
+    /* Primary CTA (blue) → gradient accent with glow */
+    html[data-theme="dark-2026"] .bg-blue-600 {
+      background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 140%);
+      color: #fff;
+      box-shadow: var(--glow-accent);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      transition: transform 0.2s var(--ease), filter 0.2s var(--ease), box-shadow 0.25s var(--ease);
+    }
+    html[data-theme="dark-2026"] .bg-blue-600:hover:not(:disabled) {
+      filter: brightness(1.12);
+      transform: translateY(-1px);
+      box-shadow: 0 14px 40px -12px rgba(139, 92, 246, 0.7), 0 0 0 1px rgba(139, 92, 246, 0.4);
+    }
+    html[data-theme="dark-2026"] .bg-emerald-600 {
+      background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
+      color: #04120c;
+      box-shadow: var(--glow-emerald);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    html[data-theme="dark-2026"] .bg-red-600 {
+      background: linear-gradient(135deg, #ef4444 0%, #f87171 100%);
+      box-shadow: var(--glow-red);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    html[data-theme="dark-2026"] .bg-indigo-600 {
+      background: linear-gradient(135deg, #6366f1 0%, #818cf8 100%);
+      box-shadow: var(--glow-indigo);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    html[data-theme="dark-2026"] .bg-blue-500 {
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      box-shadow: 0 0 12px rgba(139, 92, 246, 0.5);
+    }
+
+    /* Status pills */
+    html[data-theme="dark-2026"] .bg-blue-100 { background: var(--blue-soft); color: var(--blue); }
+    html[data-theme="dark-2026"] .text-blue-800 { color: var(--blue); }
+    html[data-theme="dark-2026"] .text-blue-600 { color: var(--accent-hover); }
+    html[data-theme="dark-2026"] .bg-emerald-100 { background: var(--emerald-soft); color: var(--emerald); }
+    html[data-theme="dark-2026"] .text-emerald-800 { color: var(--emerald); }
+    html[data-theme="dark-2026"] .text-emerald-700 { color: var(--emerald); }
+    html[data-theme="dark-2026"] .bg-amber-100 { background: var(--amber-soft); color: var(--amber); }
+    html[data-theme="dark-2026"] .text-amber-300,
+    html[data-theme="dark-2026"] .text-amber-600,
+    html[data-theme="dark-2026"] .text-amber-700,
+    html[data-theme="dark-2026"] .text-amber-800 { color: var(--amber); }
+    html[data-theme="dark-2026"] .bg-red-100 { background: var(--red-soft); color: var(--red); }
+    html[data-theme="dark-2026"] .text-red-800,
+    html[data-theme="dark-2026"] .text-red-700,
+    html[data-theme="dark-2026"] .text-red-600,
+    html[data-theme="dark-2026"] .text-red-400,
+    html[data-theme="dark-2026"] .text-red-300 { color: var(--red); }
+    html[data-theme="dark-2026"] .bg-sky-100 { background: rgba(56, 189, 248, 0.14); color: var(--sky); }
+    html[data-theme="dark-2026"] .text-sky-800 { color: var(--sky); }
+
+    /* Warning banner */
+    html[data-theme="dark-2026"] .bg-amber-100.border-amber-500 {
+      background: linear-gradient(135deg, rgba(251, 191, 36, 0.12), rgba(251, 191, 36, 0.03));
+      border-color: rgba(251, 191, 36, 0.5);
+      color: var(--amber);
+    }
+    html[data-theme="dark-2026"] .border-amber-500 { border-color: rgba(251, 191, 36, 0.5); }
+    html[data-theme="dark-2026"] .border-blue-600 { border-color: var(--accent); }
+
+    /* Math box gradient */
+    html[data-theme="dark-2026"] .bg-gradient-to-br.from-slate-900.to-slate-800 {
+      background:
+        radial-gradient(500px 300px at 20% 0%, rgba(139, 92, 246, 0.25), transparent 60%),
+        radial-gradient(400px 250px at 100% 100%, rgba(34, 211, 238, 0.18), transparent 60%),
+        linear-gradient(135deg, #0b0e1d 0%, #141a32 100%);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-glass);
+    }
+    html[data-theme="dark-2026"] .bg-slate-950\/50 {
+      background: rgba(5, 7, 15, 0.5);
+      border: 1px solid var(--border);
+    }
+
+    /* Forms */
+    html[data-theme="dark-2026"] input:not([type="checkbox"]):not([type="radio"]),
+    html[data-theme="dark-2026"] select,
+    html[data-theme="dark-2026"] textarea {
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text);
+      border: 1px solid var(--border-strong);
+      transition: border-color 0.2s var(--ease), box-shadow 0.2s var(--ease), background 0.2s var(--ease);
+    }
+    html[data-theme="dark-2026"] input::placeholder,
+    html[data-theme="dark-2026"] textarea::placeholder { color: var(--text-faint); }
+    html[data-theme="dark-2026"] input:not([type="checkbox"]):not([type="radio"]):focus,
+    html[data-theme="dark-2026"] select:focus,
+    html[data-theme="dark-2026"] textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 4px var(--accent-soft);
+      background: rgba(255, 255, 255, 0.05);
+    }
+    html[data-theme="dark-2026"] select option { background: var(--surface-solid); color: var(--text); }
+    html[data-theme="dark-2026"] input[type="checkbox"] { accent-color: var(--accent); }
+
+    /* Code */
+    html[data-theme="dark-2026"] code {
+      background: rgba(139, 92, 246, 0.12);
+      color: var(--accent-hover);
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+    }
+
+    /* Modal backdrop */
+    html[data-theme="dark-2026"] .bg-black\/50 {
+      background: rgba(5, 7, 15, 0.72);
+      backdrop-filter: blur(10px) saturate(1.1);
+      -webkit-backdrop-filter: blur(10px) saturate(1.1);
+    }
+
+    /* Shadows → richer on dark */
+    html[data-theme="dark-2026"] .shadow,
+    html[data-theme="dark-2026"] .shadow-lg,
+    html[data-theme="dark-2026"] .shadow-xl { box-shadow: var(--shadow-glass); }
+
+    /* Sidebar nav shine on hover */
+    html[data-theme="dark-2026"] aside nav a {
+      position: relative;
+      overflow: hidden;
+      transition: background 0.25s var(--ease), color 0.25s var(--ease), transform 0.2s var(--ease);
+    }
+    html[data-theme="dark-2026"] aside nav a::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(100deg, transparent 20%, rgba(139, 92, 246, 0.10) 50%, transparent 80%);
+      transform: translateX(-100%);
+      transition: transform 0.6s var(--ease);
+      pointer-events: none;
+    }
+    html[data-theme="dark-2026"] aside nav a:hover::before { transform: translateX(100%); }
+
+    /* Tables: subtle hover glow */
+    html[data-theme="dark-2026"] table tbody tr { transition: background 0.2s var(--ease); }
+
+    /* Scrollbar */
+    html[data-theme="dark-2026"] ::-webkit-scrollbar { width: 10px; height: 10px; }
+    html[data-theme="dark-2026"] ::-webkit-scrollbar-track { background: transparent; }
+    html[data-theme="dark-2026"] ::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, rgba(139, 92, 246, 0.35), rgba(34, 211, 238, 0.25));
+      border-radius: 10px;
+      border: 2px solid transparent;
+      background-clip: padding-box;
+    }
+    html[data-theme="dark-2026"] ::-webkit-scrollbar-thumb:hover {
+      background: linear-gradient(180deg, rgba(139, 92, 246, 0.55), rgba(34, 211, 238, 0.4));
+      background-clip: padding-box;
+    }
+    html[data-theme="dark-2026"] * { scrollbar-color: rgba(139, 92, 246, 0.4) transparent; scrollbar-width: thin; }
+
+    /* Disabled buttons */
+    html[data-theme="dark-2026"] button:disabled { filter: grayscale(0.3) brightness(0.85); }
+
+    /* Theme toggle pill */
+    .theme-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      cursor: pointer;
+      border: 1px solid var(--border-strong, rgba(0,0,0,0.12));
+      background: var(--surface, rgba(255,255,255,0.5));
+      color: inherit;
+      transition: transform 0.2s var(--ease, ease), box-shadow 0.2s var(--ease, ease), background 0.2s var(--ease, ease);
+      width: 100%;
+      justify-content: center;
+    }
+    .theme-toggle:hover { transform: translateY(-1px); }
+    html[data-theme="dark-2026"] .theme-toggle {
+      background: rgba(255, 255, 255, 0.04);
+      border-color: var(--border-strong);
+      color: var(--text-muted);
+    }
+    html[data-theme="dark-2026"] .theme-toggle:hover {
+      background: var(--accent-soft);
+      color: var(--text);
+      box-shadow: 0 0 0 1px var(--accent-ring);
+    }
+    .theme-toggle .dot {
+      width: 8px; height: 8px; border-radius: 999px;
+      background: linear-gradient(135deg, #8b5cf6, #22d3ee);
+      box-shadow: 0 0 10px rgba(139, 92, 246, 0.65);
+    }
+
+    /* Brand mark glow */
+    html[data-theme="dark-2026"] aside > div:first-child {
+      text-shadow: 0 0 20px rgba(139, 92, 246, 0.35);
+      letter-spacing: 0.3px;
+    }
+
+    /* Fade-in for pages */
+    html[data-theme="dark-2026"] main > * { animation: fadeUp 0.35s var(--ease) both; }
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Focus ring for links */
+    html[data-theme="dark-2026"] a:focus-visible,
+    html[data-theme="dark-2026"] button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+      border-radius: 6px;
+    }
   </style>
 </head>
 <body class="bg-slate-100 min-h-screen">
@@ -42,6 +377,16 @@ createApp({
     const admin = ref(null);
     const route = ref(location.hash.slice(1) || '/');
     const loading = ref(true);
+    const theme = ref(document.documentElement.getAttribute('data-theme') || 'dark-2026');
+
+    const applyTheme = (t) => {
+      document.documentElement.setAttribute('data-theme', t);
+      try { localStorage.setItem('theme', t); } catch (_) {}
+    };
+    const toggleTheme = () => {
+      theme.value = theme.value === 'dark-2026' ? 'light' : 'dark-2026';
+      applyTheme(theme.value);
+    };
 
     window.addEventListener('hashchange', () => { route.value = location.hash.slice(1) || '/'; });
     const navigate = (path) => { location.hash = path; };
@@ -63,7 +408,7 @@ createApp({
       navigate('/login');
     };
 
-    return { admin, route, loading, navigate, logout, checkAuth };
+    return { admin, route, loading, navigate, logout, checkAuth, theme, toggleTheme };
   },
   template: `
     <div v-if="loading" class="flex items-center justify-center min-h-screen text-slate-500">بارگذاری...</div>
@@ -82,6 +427,10 @@ createApp({
           <a href="#/change-password" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route === '/change-password' ? 'bg-slate-800' : ''">🔑 تغییر رمز</a>
         </nav>
         <div class="text-sm text-slate-400 mt-auto pt-4 border-t border-slate-700">
+          <button @click="toggleTheme" class="theme-toggle mb-3" :title="theme === 'dark-2026' ? 'حالت روشن' : 'Dark 2026'">
+            <span class="dot"></span>
+            <span>{{ theme === 'dark-2026' ? '✦ Dark 2026' : '☀ Light' }}</span>
+          </button>
           <div>{{ admin.username }}</div>
           <button @click="logout" class="mt-2 text-red-400 hover:text-red-300">خروج</button>
         </div>
