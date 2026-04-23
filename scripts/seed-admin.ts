@@ -7,6 +7,7 @@
  * باعث می‌شه کار دیگه‌ای نتونی انجام بدی تا رمز رو عوض نکردی.
  */
 
+import 'dotenv/config';
 import { pool, closePool } from '../src/db/pool.js';
 import { hashPassword } from '../src/auth/index.js';
 

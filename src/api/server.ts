@@ -123,7 +123,7 @@ export async function buildServer() {
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "'unsafe-inline'", 'https://unpkg.com', 'https://cdn.tailwindcss.com'],
+        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", 'https://unpkg.com', 'https://cdn.tailwindcss.com'],
         styleSrc: ["'self'", "'unsafe-inline'", 'https://cdn.tailwindcss.com'],
         connectSrc: ["'self'"],
         imgSrc: ["'self'", 'data:'],
@@ -161,7 +161,6 @@ export async function buildServer() {
   await app.register(staticPlugin, {
     root: join(__dirname, '../../public'),
     prefix: '/',
-    decorateReply: false,
   });
 
   // SPA fallback — هر route ناشناخته بره به index.html

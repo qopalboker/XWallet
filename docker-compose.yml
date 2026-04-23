@@ -30,6 +30,8 @@ services:
       - ./src/db/migrations/005_generation_jobs_status_check.sql:/docker-entrypoint-initdb.d/05-status-check.sql:ro
       - ./src/db/migrations/006_addresses_next_check_at.sql:/docker-entrypoint-initdb.d/06-next-check.sql:ro
       - ./src/db/migrations/007_api_credentials_version.sql:/docker-entrypoint-initdb.d/07-cred-version.sql:ro
+      - ./src/db/migrations/008_drop_dead_btc_rpc.sql:/docker-entrypoint-initdb.d/08-drop-btc-rpc.sql:ro
+      - ./src/db/migrations/009_benchmark_allowed.sql:/docker-entrypoint-initdb.d/09-benchmark-allowed.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-postgres}"]
       interval: 5s

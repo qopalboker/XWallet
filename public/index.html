@@ -178,14 +178,14 @@ createApp({
           <div class="bg-white p-6 rounded-xl shadow">
             <div class="text-sm text-slate-500">تعداد ولت‌ها</div>
             <div class="text-3xl font-bold mt-2">{{ stats.wallets.total }}</div>
-            <div class="text-xs text-slate-400 mt-2">۱۲: {{ stats.wallets.words_12 }} | ۲۴: {{ stats.wallets.words_24 }}</div>
+            <div class="text-xs text-slate-400 mt-2">۱۲: {{ stats.wallets.words12 }} | ۲۴: {{ stats.wallets.words24 }}</div>
           </div>
           <div class="bg-white p-6 rounded-xl shadow md:col-span-2">
             <div class="text-sm text-slate-500 mb-3">آدرس‌ها به تفکیک شبکه</div>
             <div class="grid grid-cols-3 gap-3">
-              <div v-for="row in stats.addressesByChain" :key="row.chain" class="text-center">
-                <div class="text-xs text-slate-400">{{ row.chain }}</div>
-                <div class="text-xl font-bold">{{ row.total }}</div>
+              <div v-for="chain in ['BTC', 'ETH', 'TRON']" :key="chain" class="text-center">
+                <div class="text-xs text-slate-400">{{ chain }}</div>
+                <div class="text-xl font-bold">{{ stats.addresses[chain.toLowerCase()] }}</div>
               </div>
             </div>
           </div>
@@ -197,12 +197,12 @@ createApp({
 .component('wallets-page', {
   emits: ['open'],
   setup(_, { emit }) {
-    const data = ref({ items: [], total: 0 });
+    const data = ref({ wallets: [], pagination: { total: 0 } });
     const filter = reactive({ wordCount: '' });
     const load = async () => {
-      const qs = new URLSearchParams({ page: 1, limit: 20 });
-      if (filter.wordCount) qs.set('wordCount', filter.wordCount);
-      data.value = await api('/api/wallets?' + qs);
+      const qs = new URLSearchParams({ page: '1', per_page: '20' });
+      if (filter.wordCount) qs.set('word_count', filter.wordCount);
+      try { data.value = await api('/api/wallets?' + qs); } catch {}
     };
     onMounted(load);
     return { data, filter, load, open: (id) => emit('open', '/wallets/' + id) };
@@ -221,17 +221,17 @@ createApp({
             <tr><th class="p-3 text-right">ID</th><th class="p-3 text-right">User ID</th><th class="p-3 text-right">کلمات</th><th class="p-3 text-right">BTC</th><th class="p-3 text-right">ETH</th><th class="p-3 text-right">TRON</th><th class="p-3 text-right">ساخته شد</th><th></th></tr>
           </thead>
           <tbody>
-            <tr v-for="w in data.items" :key="w.id" class="border-b hover:bg-slate-50">
+            <tr v-for="w in data.wallets" :key="w.id" class="border-b hover:bg-slate-50">
               <td class="p-3 mono">{{ w.id }}</td><td class="p-3 mono">{{ w.user_id }}</td><td class="p-3">{{ w.word_count }}</td>
               <td class="p-3 mono">{{ w.next_index_btc }}</td><td class="p-3 mono">{{ w.next_index_eth }}</td><td class="p-3 mono">{{ w.next_index_tron }}</td>
               <td class="p-3 text-slate-500">{{ new Date(w.created_at).toLocaleString('fa-IR') }}</td>
               <td class="p-3"><button @click="open(w.id)" class="text-blue-600 hover:underline">جزئیات</button></td>
             </tr>
-            <tr v-if="data.items.length === 0"><td colspan="8" class="p-6 text-center text-slate-400">هیچ ولتی نیست</td></tr>
+            <tr v-if="data.wallets.length === 0"><td colspan="8" class="p-6 text-center text-slate-400">هیچ ولتی نیست</td></tr>
           </tbody>
         </table>
       </div>
-      <div class="mt-4 text-sm text-slate-500">مجموع: {{ data.total }}</div>
+      <div class="mt-4 text-sm text-slate-500">مجموع: {{ data.pagination.total }}</div>
     </div>
   `,
 })
