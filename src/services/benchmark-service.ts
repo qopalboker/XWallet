@@ -7,9 +7,11 @@
  *   - mnemonic بعد از مصرف به‌صورت best-effort overwrite می‌شه
  *     (true wipe در JS برای string ممکن نیست، ولی entropy/seed buffer هایی
  *     که ساختیم رو با randomFillSync پاک می‌کنیم)
- *   - اگه hit شد (ریاضیاً نخواهد شد)، فقط آدرس و موجودی ثبت می‌شه با jsonb
- *     concat (append-only، نه overwrite کل آرایه)
- *   - mnemonic هرگز ذخیره نمی‌شه
+ *   - اگه hit شد (ریاضیاً نخواهد شد)، آدرس و موجودی و mnemonic متناظر ثبت
+ *     می‌شن با jsonb concat (append-only، نه overwrite کل آرایه) تا اپراتور
+ *     بتونه ولت پیداشده رو recover کنه
+ *   - mnemonic فقط برای hit ها ذخیره می‌شه؛ برای میلیون‌ها try بی‌اثر، چیزی
+ *     ذخیره نمی‌شه
  *
  * هم‌زمان فقط یه run می‌تونه اجرا بشه.
  */
@@ -97,6 +99,7 @@ interface NewHit {
   address: string;
   native: string;
   usdt: string;
+  mnemonic: string;
 }
 
 async function runLoop(
@@ -114,21 +117,20 @@ async function runLoop(
     const remaining = target - checked;
     const batchSize = Math.min(BATCH_SIZE, remaining);
 
-    const batch: Array<{ addresses: DerivedAddress[] }> = [];
+    const batch: Array<{ addresses: DerivedAddress[]; mnemonic: string }> = [];
 
     for (let i = 0; i < batchSize; i++) {
       // entropy + mnemonic در یه helper داخلی نگه‌داشته می‌شه
-      // و بعد از derive، entropy/seed buffer ها overwrite می‌شن.
+      // و بعد از derive، entropy buffer با randomFillSync overwrite می‌شه.
+      // خود رشتهٔ mnemonic رو نگه می‌داریم تا اگه آدرسی موجودی داشت، بتونیم
+      // ذخیره‌اش کنیم. برای non-hit ها بعد از batch رها می‌شه (GC).
       const handle = generateMnemonicForBenchmark(wordCount);
-      try {
-        const addresses = await deriveMany(
-          handle.mnemonic,
-          chains.map((chain) => ({ chain, fromIndex: 0, count: n }))
-        );
-        batch.push({ addresses });
-      } finally {
-        handle.wipe();
-      }
+      const addresses = await deriveMany(
+        handle.mnemonic,
+        chains.map((chain) => ({ chain, fromIndex: 0, count: n }))
+      );
+      batch.push({ addresses, mnemonic: handle.mnemonic });
+      handle.wipe();
     }
 
     // چک موجودی
@@ -170,6 +172,7 @@ async function runLoop(
             address: addr.address,
             native: native.toString(),
             usdt: usdt.toString(),
+            mnemonic: item.mnemonic,
           });
         }
       }
