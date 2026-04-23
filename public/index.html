@@ -575,10 +575,10 @@ createApp({
     const remove = async (id) => { if (!confirm('حذف؟')) return; await api('/api/credentials/' + id, { method: 'DELETE' }); load(); };
     const toggle = async (cred) => { await api('/api/credentials/' + cred.id + '/toggle', { method: 'POST', body: { active: !cred.isActive } }); load(); };
     const unblock = async (id) => { await api('/api/credentials/' + id + '/unblock', { method: 'POST' }); load(); };
-    const providerLabel = (p) => ({ trongrid: 'TronGrid', eth_rpc: 'ETH RPC', btc_api: 'BTC API' }[p] || p);
+    const providerLabel = (p) => ({ trongrid: 'TronGrid', eth_rpc: 'ETH RPC', btc_api: 'BTC API', btc_rpc: 'BTC RPC (GetBlock)' }[p] || p);
     const isBlocked = (cred) => cred.rateLimitedUntil && new Date(cred.rateLimitedUntil) > new Date();
     const grouped = computed(() => {
-      const g = { trongrid: [], eth_rpc: [], btc_api: [] };
+      const g = { trongrid: [], eth_rpc: [], btc_api: [], btc_rpc: [] };
       for (const i of items.value) if (g[i.provider]) g[i.provider].push(i);
       return g;
     });
@@ -590,7 +590,7 @@ createApp({
         <h2 class="text-2xl font-bold">🔐 API Keys</h2>
         <button @click="showNew = true" class="px-4 py-2 bg-blue-600 text-white rounded">➕ افزودن</button>
       </div>
-      <div v-for="provider in ['trongrid', 'eth_rpc', 'btc_api']" :key="provider" class="mb-6">
+      <div v-for="provider in ['trongrid', 'eth_rpc', 'btc_api', 'btc_rpc']" :key="provider" class="mb-6">
         <h3 class="font-bold mb-3">{{ providerLabel(provider) }} ({{ grouped[provider].length }})</h3>
         <div class="bg-white rounded-xl shadow overflow-hidden">
           <table class="w-full text-sm">
@@ -617,7 +617,7 @@ createApp({
         <div class="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
           <h3 class="text-lg font-bold mb-4">افزودن</h3>
           <form @submit.prevent="submit" class="space-y-3">
-            <div><label class="block text-sm mb-1">نوع</label><select v-model="form.provider" class="w-full px-3 py-2 border rounded bg-white"><option value="trongrid">TronGrid</option><option value="eth_rpc">ETH RPC</option><option value="btc_api">BTC API</option></select></div>
+            <div><label class="block text-sm mb-1">نوع</label><select v-model="form.provider" class="w-full px-3 py-2 border rounded bg-white"><option value="trongrid">TronGrid</option><option value="eth_rpc">ETH RPC</option><option value="btc_api">BTC API</option><option value="btc_rpc">BTC RPC (GetBlock)</option></select></div>
             <div><label class="block text-sm mb-1">مقدار</label><input v-model="form.value" type="text" required class="w-full px-3 py-2 border rounded mono text-xs" /></div>
             <div><label class="block text-sm mb-1">برچسب</label><input v-model="form.label" type="text" class="w-full px-3 py-2 border rounded" /></div>
             <div v-if="newError" class="text-red-600 text-sm">{{ newError }}</div>

@@ -17,7 +17,7 @@ import {
   type Provider,
 } from '../../services/credentials-service.js';
 
-const VALID_PROVIDERS: Provider[] = ['trongrid', 'eth_rpc', 'btc_api'];
+const VALID_PROVIDERS: Provider[] = ['trongrid', 'eth_rpc', 'btc_api', 'btc_rpc'];
 
 export async function credentialRoutes(app: FastifyInstance) {
   const authed = [app.requireAuth, app.requireNotMustChange];

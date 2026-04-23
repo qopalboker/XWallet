@@ -16,7 +16,7 @@ import {
   type EncryptedMnemonic,
 } from '../crypto/aes.js';
 
-export type Provider = 'trongrid' | 'eth_rpc' | 'btc_api';
+export type Provider = 'trongrid' | 'eth_rpc' | 'btc_api' | 'btc_rpc';
 
 export interface CredentialRow {
   id: number;

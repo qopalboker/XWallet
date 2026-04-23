@@ -10,6 +10,7 @@
     "worker:dev": "tsx watch src/worker.ts",
     "seed:admin": "tsx scripts/seed-admin.ts",
     "seed:credentials": "tsx scripts/seed-credentials.ts",
+    "import:getblock": "tsx scripts/import-getblock.ts",
     "migrate": "for f in src/db/schema.sql src/db/migrations/*.sql; do psql $DATABASE_URL -f $f; done",
     "build": "tsc",
     "lint": "eslint 'src/**/*.ts' 'scripts/**/*.ts'",
