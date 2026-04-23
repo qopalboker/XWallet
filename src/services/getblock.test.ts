@@ -13,6 +13,9 @@ import {
   parseConfig,
   providerForEntry,
   buildEndpointUrl,
+  resolveRegion,
+  verifyRegionOnBoot,
+  __resetActiveRegionForTests,
 } from './getblock.js';
 
 describe('isValidGetBlockToken', () => {
@@ -135,5 +138,57 @@ describe('buildEndpointUrl', () => {
   it('rejects invalid tokens', () => {
     assert.throws(() => buildEndpointUrl('not-hex', 'io'));
     assert.throws(() => buildEndpointUrl('abcdef', 'io'));
+  });
+});
+
+describe('region resolution persistence', () => {
+  const VALID = '499ae68ced964da691b52dbbc40a65b9';
+
+  it('resolveRegion falls back to env when activeRegion is null', () => {
+    __resetActiveRegionForTests();
+    const saved = process.env.GETBLOCK_REGION;
+    process.env.GETBLOCK_REGION = 'us';
+    try {
+      assert.equal(resolveRegion(), 'us');
+      assert.equal(buildEndpointUrl(VALID), `https://go.getblock.us/${VALID}/`);
+    } finally {
+      process.env.GETBLOCK_REGION = saved;
+      __resetActiveRegionForTests();
+    }
+  });
+
+  it('verifyRegionOnBoot overrides env when preferred is unreachable (runtime اثر می‌گذاره)', async () => {
+    __resetActiveRegionForTests();
+    const saved = process.env.GETBLOCK_REGION;
+    process.env.GETBLOCK_REGION = 'us';
+
+    // شبیه‌سازی اینکه preferred unreachable هست ولی 'io' ok هست
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = ((url: string | URL) => {
+      const s = typeof url === 'string' ? url : url.toString();
+      if (s.startsWith('https://go.getblock.us')) {
+        return Promise.reject(new Error('ENOTFOUND'));
+      }
+      return Promise.resolve(new Response('', { status: 403 }));
+    }) as typeof fetch;
+
+    try {
+      const logs: string[] = [];
+      const log = {
+        info: (m: string) => logs.push(`INFO ${m}`),
+        warn: (m: string) => logs.push(`WARN ${m}`),
+      };
+      const chosen = await verifyRegionOnBoot(log, { recheckIntervalMs: null });
+      assert.equal(chosen, 'io');
+
+      // مهم‌ترین assertion: runtime URL باید از 'io' استفاده کنه
+      // (fallback واقعاً apply شده — نه فقط لاگ)
+      assert.equal(resolveRegion(), 'io');
+      assert.equal(buildEndpointUrl(VALID), `https://go.getblock.io/${VALID}/`);
+    } finally {
+      globalThis.fetch = originalFetch;
+      process.env.GETBLOCK_REGION = saved;
+      __resetActiveRegionForTests();
+    }
   });
 });

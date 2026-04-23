@@ -102,10 +102,32 @@ const REGION_BASES: Record<GetBlockRegion, string> = {
   asia: 'https://go.getblock.asia',
 };
 
+/**
+ * region فعلی runtime. پیش‌فرض `null` یعنی هنوز boot check نشده و
+ * `resolveRegion()` باید از env بخونه. وقتی `verifyRegionOnBoot` اجرا
+ * می‌شه، اگه region کاربر unreachable بود این var رو به 'io' ست می‌کنه
+ * تا `buildEndpointUrl` واقعاً از fallback استفاده کنه.
+ *
+ * موقع recheck دوره‌ای هم همین مقدار به‌روز می‌شه.
+ */
+let activeRegion: GetBlockRegion | null = null;
+
+/**
+ * Region مورد استفاده. اولویت:
+ *   1. `activeRegion` (اگه boot/recheck یه تصمیم واقعی گرفته)
+ *   2. env `GETBLOCK_REGION`
+ *   3. 'io'
+ */
 export function resolveRegion(): GetBlockRegion {
+  if (activeRegion) return activeRegion;
   const v = (process.env.GETBLOCK_REGION ?? 'io').toLowerCase();
   if (v === 'us' || v === 'asia' || v === 'io') return v;
   return 'io';
+}
+
+/** فقط برای تست: activeRegion رو reset می‌کنه. */
+export function __resetActiveRegionForTests(): void {
+  activeRegion = null;
 }
 
 /**
@@ -127,20 +149,64 @@ export async function isRegionReachable(region: GetBlockRegion, timeoutMs = 5_00
   }
 }
 
+type RegionLogger = { info: (m: string) => void; warn: (m: string) => void };
+
+async function evaluateRegion(logger: RegionLogger): Promise<GetBlockRegion> {
+  // جدا از activeRegion تصمیم می‌گیریم تا recheck بتونه به region ترجیحی
+  // برگرده وقتی شبکه دوباره وصل شد.
+  const preferred = ((): GetBlockRegion => {
+    const v = (process.env.GETBLOCK_REGION ?? 'io').toLowerCase();
+    return v === 'us' || v === 'asia' || v === 'io' ? v : 'io';
+  })();
+
+  if (await isRegionReachable(preferred)) {
+    logger.info(`[getblock] region '${preferred}' reachable (${REGION_BASES[preferred]})`);
+    return preferred;
+  }
+  if (preferred !== 'io' && (await isRegionReachable('io'))) {
+    logger.warn(`[getblock] region '${preferred}' unreachable — using 'io'`);
+    return 'io';
+  }
+  logger.warn(`[getblock] no region reachable — keeping '${preferred}' (will retry)`);
+  return preferred;
+}
+
 /**
  * تو startup فراخوانی می‌شه. Region کانفیگ‌شده رو چک می‌کنه؛ اگه
- * unreachable بود، به 'io' fallback می‌کنه.
+ * unreachable بود، runtime به 'io' fallback می‌کنه.
+ *
+ * در صورت تنظیم `recheckIntervalMs` (پیش‌فرض ۱۰ دقیقه)، یه interval
+ * راه می‌اندازه که دوره‌ای `activeRegion` رو به‌روز کنه. این مهمه
+ * برای شبکه‌های بی‌ثبات — اگه شبکه برگشت و region ترجیحی دوباره
+ * reachable شد، بدون restart به‌کار می‌افته.
  */
-export async function verifyRegionOnBoot(logger?: { info: (m: string) => void; warn: (m: string) => void }): Promise<GetBlockRegion> {
-  const requested = resolveRegion();
-  const ok = await isRegionReachable(requested);
+export async function verifyRegionOnBoot(
+  logger?: RegionLogger,
+  opts: { recheckIntervalMs?: number | null } = {}
+): Promise<GetBlockRegion> {
   const log = logger ?? { info: (m) => console.log(m), warn: (m) => console.warn(m) };
-  if (ok) {
-    log.info(`[getblock] region '${requested}' reachable (${REGION_BASES[requested]})`);
-    return requested;
+  activeRegion = await evaluateRegion(log);
+
+  const interval = opts.recheckIntervalMs ?? 10 * 60 * 1000;
+  if (interval && interval > 0) {
+    const t = setInterval(() => {
+      evaluateRegion(log)
+        .then((r) => {
+          if (r !== activeRegion) {
+            log.info(`[getblock] region switched: ${activeRegion} → ${r}`);
+            activeRegion = r;
+          }
+        })
+        .catch((e) => log.warn(`[getblock] region recheck failed: ${(e as Error).message}`));
+    }, interval);
+    // داخلی Node: اگه interval فقط کار در پس‌زمینه بکنه، باعث نشه process
+    // از shutdown جلوگیری کنه.
+    if (typeof (t as { unref?: () => void }).unref === 'function') {
+      (t as { unref: () => void }).unref();
+    }
   }
-  log.warn(`[getblock] region '${requested}' unreachable — falling back to 'io'`);
-  return 'io';
+
+  return activeRegion;
 }
 
 // ─── URL builder ────────────────────────────────────────────────────────
