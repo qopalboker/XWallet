@@ -93,7 +93,6 @@ src/
 - bcrypt cost 12 برای رمز ادمین
 - JWT تو httpOnly cookie
 - Lockout بعد از ۵ تلاش ناموفق
-- Double-auth برای reveal mnemonic
 - Audit log کامل
 
 ## License
