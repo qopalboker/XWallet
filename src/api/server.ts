@@ -27,6 +27,7 @@ import { benchmarkRoutes } from './routes/benchmark.js';
 import { statsRoutes } from './routes/stats.js';
 import { registerAuthDecorators } from '../auth/index.js';
 import { cleanupOnStartup } from '../services/benchmark-service.js';
+import { verifyRegionOnBoot } from '../services/getblock.js';
 import { cleanupExpiredSessions } from '../auth/jwt.js';
 import { closePool } from '../db/pool.js';
 import { closeRedis } from '../redis/client.js';
@@ -197,6 +198,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       // cleanup های یه‌بارمصرف startup
       await cleanupOnStartup();
       await cleanupExpiredSessions().catch((e) => app.log.warn({ e }, 'session cleanup failed'));
+      // chk GetBlock region reachability؛ اگه fail شد فقط warn می‌ده،
+      // startup رو block نمی‌کنه.
+      await verifyRegionOnBoot({
+        info: (m) => app.log.info(m),
+        warn: (m) => app.log.warn(m),
+      }).catch((e) => app.log.warn({ e }, 'getblock region check failed'));
 
       // Graceful shutdown
       const shutdown = async (signal: string) => {

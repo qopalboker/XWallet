@@ -14,9 +14,9 @@
 
 import 'dotenv/config';
 import { pool, closePool } from '../src/db/pool.js';
-import { addCredential } from '../src/services/credentials-service.js';
+import { addCredential, type Provider } from '../src/services/credentials-service.js';
 
-async function seedForProvider(envVar: string, provider: 'trongrid' | 'eth_rpc' | 'btc_api') {
+async function seedForProvider(envVar: string, provider: Provider) {
   const raw = process.env[envVar];
   if (!raw) {
     console.log(`  ${envVar} خالیه، skip می‌شه`);

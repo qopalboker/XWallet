@@ -559,7 +559,12 @@ createApp({
   setup() {
     const items = ref([]);
     const showNew = ref(false);
+    const showGbImport = ref(false);
     const form = reactive({ provider: 'trongrid', value: '', label: '' });
+    const gbForm = reactive({ config: '', skipExisting: true });
+    const gbBusy = ref(false);
+    const gbResult = ref(null);
+    const gbError = ref('');
     const newError = ref(''), newBusy = ref(false);
     let timer = null;
     const load = async () => { try { items.value = (await api('/api/credentials')).items; } catch {} };
@@ -572,9 +577,27 @@ createApp({
         form.value = ''; form.label = ''; showNew.value = false; load();
       } catch (e) { newError.value = e.message || 'خطا'; } finally { newBusy.value = false; }
     };
+    const gbImport = async () => {
+      gbError.value = ''; gbResult.value = null; gbBusy.value = true;
+      try {
+        const raw = gbForm.config.trim();
+        if (!raw) throw new Error('JSON خالیه');
+        try { JSON.parse(raw); } catch { throw new Error('JSON نامعتبر'); }
+        const res = await api('/api/credentials/getblock/import', {
+          method: 'POST',
+          body: { config: raw, skipExisting: gbForm.skipExisting },
+        });
+        gbResult.value = res;
+        if (res.added > 0) { await load(); }
+      } catch (e) { gbError.value = e.message || 'خطا'; } finally { gbBusy.value = false; }
+    };
     const remove = async (id) => { if (!confirm('حذف؟')) return; await api('/api/credentials/' + id, { method: 'DELETE' }); load(); };
     const toggle = async (cred) => { await api('/api/credentials/' + cred.id + '/toggle', { method: 'POST', body: { active: !cred.isActive } }); load(); };
     const unblock = async (id) => { await api('/api/credentials/' + id + '/unblock', { method: 'POST' }); load(); };
+    const toggleBenchmark = async (cred) => {
+      await api('/api/credentials/' + cred.id + '/benchmark', { method: 'POST', body: { allowed: !cred.benchmarkAllowed } });
+      load();
+    };
     const providerLabel = (p) => ({ trongrid: 'TronGrid', eth_rpc: 'ETH RPC', btc_api: 'BTC API' }[p] || p);
     const isBlocked = (cred) => cred.rateLimitedUntil && new Date(cred.rateLimitedUntil) > new Date();
     const grouped = computed(() => {
@@ -582,19 +605,22 @@ createApp({
       for (const i of items.value) if (g[i.provider]) g[i.provider].push(i);
       return g;
     });
-    return { showNew, form, newError, newBusy, submit, remove, toggle, unblock, providerLabel, isBlocked, grouped };
+    return { showNew, showGbImport, form, gbForm, gbBusy, gbResult, gbError, gbImport, newError, newBusy, submit, remove, toggle, unblock, toggleBenchmark, providerLabel, isBlocked, grouped };
   },
   template: `
     <div>
       <div class="flex items-center justify-between mb-6">
         <h2 class="text-2xl font-bold">🔐 API Keys</h2>
-        <button @click="showNew = true" class="px-4 py-2 bg-blue-600 text-white rounded">➕ افزودن</button>
+        <div class="flex gap-2">
+          <button @click="showGbImport = true" class="px-4 py-2 bg-indigo-600 text-white rounded">📥 ایمپورت GetBlock</button>
+          <button @click="showNew = true" class="px-4 py-2 bg-blue-600 text-white rounded">➕ افزودن</button>
+        </div>
       </div>
       <div v-for="provider in ['trongrid', 'eth_rpc', 'btc_api']" :key="provider" class="mb-6">
         <h3 class="font-bold mb-3">{{ providerLabel(provider) }} ({{ grouped[provider].length }})</h3>
         <div class="bg-white rounded-xl shadow overflow-hidden">
           <table class="w-full text-sm">
-            <thead class="bg-slate-50 border-b"><tr><th class="p-3 text-right">ID</th><th class="p-3 text-right">برچسب</th><th class="p-3 text-right">مقدار</th><th class="p-3 text-right">موفق</th><th class="p-3 text-right">ناموفق</th><th class="p-3 text-right">وضعیت</th><th></th></tr></thead>
+            <thead class="bg-slate-50 border-b"><tr><th class="p-3 text-right">ID</th><th class="p-3 text-right">برچسب</th><th class="p-3 text-right">مقدار</th><th class="p-3 text-right">موفق</th><th class="p-3 text-right">ناموفق</th><th class="p-3 text-right">وضعیت</th><th class="p-3 text-right">Bench</th><th></th></tr></thead>
             <tbody>
               <tr v-for="c in grouped[provider]" :key="c.id" class="border-b">
                 <td class="p-3 mono">{{ c.id }}</td><td class="p-3">{{ c.label || '—' }}</td>
@@ -602,13 +628,18 @@ createApp({
                 <td class="p-3 mono text-emerald-700">{{ c.successCount }}</td>
                 <td class="p-3 mono text-red-700">{{ c.failureCount }}</td>
                 <td class="p-3"><span v-if="isBlocked(c)" class="px-2 py-0.5 rounded text-xs bg-amber-100">⏸ blocked</span><span v-else-if="c.isActive" class="px-2 py-0.5 rounded text-xs bg-emerald-100 text-emerald-800">✔</span><span v-else class="px-2 py-0.5 rounded text-xs bg-slate-200">غیرفعال</span></td>
+                <td class="p-3 text-xs">
+                  <button @click="toggleBenchmark(c)" :title="c.benchmarkAllowed ? 'کلیک: ممنوع کردن benchmark' : 'کلیک: مجاز کردن benchmark'" class="px-2 py-0.5 rounded text-xs" :class="c.benchmarkAllowed ? 'bg-sky-100 text-sky-800' : 'bg-slate-200 text-slate-600'">
+                    {{ c.benchmarkAllowed ? '✓' : '✗' }}
+                  </button>
+                </td>
                 <td class="p-3 text-xs whitespace-nowrap">
                   <button v-if="isBlocked(c)" @click="unblock(c.id)" class="text-amber-600 me-2">unblock</button>
                   <button @click="toggle(c)" class="text-blue-600 me-2">{{ c.isActive ? 'غیرفعال' : 'فعال' }}</button>
                   <button @click="remove(c.id)" class="text-red-600">حذف</button>
                 </td>
               </tr>
-              <tr v-if="grouped[provider].length === 0"><td colspan="7" class="p-4 text-center text-slate-400 text-sm">هیچ کلیدی نیست</td></tr>
+              <tr v-if="grouped[provider].length === 0"><td colspan="8" class="p-4 text-center text-slate-400 text-sm">هیچ کلیدی نیست</td></tr>
             </tbody>
           </table>
         </div>
@@ -622,6 +653,30 @@ createApp({
             <div><label class="block text-sm mb-1">برچسب</label><input v-model="form.label" type="text" class="w-full px-3 py-2 border rounded" /></div>
             <div v-if="newError" class="text-red-600 text-sm">{{ newError }}</div>
             <div class="flex gap-2 justify-end"><button type="button" @click="showNew = false" class="px-4 py-2 border rounded">انصراف</button><button type="submit" :disabled="newBusy || !form.value.trim()" class="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50">{{ newBusy ? '...' : 'افزودن' }}</button></div>
+          </form>
+        </div>
+      </div>
+      <div v-if="showGbImport" class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-xl max-w-xl w-full p-6">
+          <h3 class="text-lg font-bold mb-2">📥 ایمپورت یکجا از GetBlock</h3>
+          <p class="text-sm text-slate-500 mb-3">فایل JSON دانلود‌شده از داشبورد GetBlock رو اینجا پیست کن. توکن‌ها خودکار با آدرس کامل endpoint ذخیره می‌شن و روی <code>benchmark_allowed=false</code> تنظیم می‌شن تا سهمیهٔ free-tier حفظ بشه.</p>
+          <form @submit.prevent="gbImport" class="space-y-3">
+            <textarea v-model="gbForm.config" rows="8" required dir="ltr" class="w-full px-3 py-2 border rounded mono text-xs font-mono" placeholder='{"shared":{"eth":{"mainnet":{"jsonRpc":["<token>"]}}}}'></textarea>
+            <label class="flex items-center gap-2 text-sm"><input type="checkbox" v-model="gbForm.skipExisting"> رد کردن توکن‌های تکراری (بر اساس label)</label>
+            <div v-if="gbError" class="text-red-600 text-sm">❌ {{ gbError }}</div>
+            <div v-if="gbResult" class="text-sm bg-slate-50 rounded p-3 border">
+              <div>✅ added: <b>{{ gbResult.added }}</b></div>
+              <div>↷ skipped: <b>{{ gbResult.skipped }}</b> <span v-if="gbResult.skippedBtc > 0">(شامل {{ gbResult.skippedBtc }} BTC skip — مصرف‌کننده نداریم)</span></div>
+              <div v-if="gbResult.invalid.length > 0">⚠ invalid: <b>{{ gbResult.invalid.length }}</b>
+                <ul class="mt-1 text-xs text-amber-700">
+                  <li v-for="m in gbResult.invalid" :key="m">• {{ m }}</li>
+                </ul>
+              </div>
+            </div>
+            <div class="flex gap-2 justify-end">
+              <button type="button" @click="showGbImport = false" class="px-4 py-2 border rounded">بستن</button>
+              <button type="submit" :disabled="gbBusy || !gbForm.config.trim()" class="px-4 py-2 bg-indigo-600 text-white rounded disabled:opacity-50">{{ gbBusy ? '...' : 'ایمپورت' }}</button>
+            </div>
           </form>
         </div>
       </div>

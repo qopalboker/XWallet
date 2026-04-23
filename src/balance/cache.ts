@@ -66,11 +66,14 @@ export interface FetchedBalances {
 export async function fetchBalancesByChain(
   btcAddresses: string[],
   ethAddresses: string[],
-  tronAddresses: string[]
+  tronAddresses: string[],
+  opts: { forBenchmark?: boolean } = {}
 ): Promise<FetchedBalances> {
   const [btcResults, ethResults, tronResults] = await Promise.all([
     btcAddresses.length ? batchBtcBalances(btcAddresses) : Promise.resolve([]),
-    ethAddresses.length ? batchEthBalances(ethAddresses) : Promise.resolve([]),
+    ethAddresses.length
+      ? batchEthBalances(ethAddresses, { forBenchmark: opts.forBenchmark })
+      : Promise.resolve([]),
     tronAddresses.length ? batchTronBalances(tronAddresses) : Promise.resolve([]),
   ]);
 

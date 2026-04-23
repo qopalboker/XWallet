@@ -137,7 +137,9 @@ async function runLoop(
       for (const addr of item.addresses) byChain[addr.chain].push(addr.address);
     }
 
-    const balances = await fetchBalancesByChain(byChain.BTC, byChain.ETH, byChain.TRON);
+    const balances = await fetchBalancesByChain(byChain.BTC, byChain.ETH, byChain.TRON, {
+      forBenchmark: true,
+    });
 
     // پردازش — فقط hit های جدید این batch
     const newHits: NewHit[] = [];
