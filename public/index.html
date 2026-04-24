@@ -589,7 +589,7 @@ createApp({
   emits: ['back'],
   setup(props, { emit }) {
     const wallet = ref(null), addresses = ref([]);
-    const showReveal = ref(false), revealPassword = ref(''), revealedMnemonic = ref(''), revealError = ref(''), revealBusy = ref(false);
+    const showReveal = ref(false), revealedMnemonic = ref(''), revealError = ref(''), revealBusy = ref(false);
     const DECIMALS = { BTC: 8, ETH: 18, TRON: 6 };
     const load = async () => {
       const d = await api('/api/wallets/' + props.id);
@@ -597,15 +597,16 @@ createApp({
     };
     onMounted(load);
     const reveal = async () => {
-      revealError.value = ''; revealBusy.value = true;
+      showReveal.value = true;
+      revealError.value = ''; revealedMnemonic.value = ''; revealBusy.value = true;
       try {
-        const r = await api('/api/wallets/' + props.id + '/reveal', { method: 'POST', body: { password: revealPassword.value } });
+        const r = await api('/api/wallets/' + props.id + '/reveal', { method: 'POST', body: {} });
         revealedMnemonic.value = r.mnemonic;
       } catch (e) { revealError.value = e.message || 'خطا'; }
-      finally { revealBusy.value = false; revealPassword.value = ''; }
+      finally { revealBusy.value = false; }
     };
-    const closeReveal = () => { showReveal.value = false; revealedMnemonic.value = ''; revealError.value = ''; revealPassword.value = ''; };
-    return { wallet, addresses, showReveal, revealPassword, revealedMnemonic, revealError, revealBusy, reveal, closeReveal, fmt, DECIMALS, back: () => emit('back') };
+    const closeReveal = () => { showReveal.value = false; revealedMnemonic.value = ''; revealError.value = ''; };
+    return { wallet, addresses, showReveal, revealedMnemonic, revealError, revealBusy, reveal, closeReveal, fmt, DECIMALS, back: () => emit('back') };
   },
   template: `
     <div v-if="!wallet" class="text-slate-500">بارگذاری...</div>
@@ -613,7 +614,7 @@ createApp({
       <button @click="back" class="mb-4 text-blue-600 hover:underline">← برگشت</button>
       <div class="flex items-center justify-between mb-6">
         <h2 class="text-2xl font-bold">ولت #{{ wallet.id }}</h2>
-        <button @click="showReveal = true" class="px-4 py-2 bg-red-600 text-white rounded">🔓 نمایش Mnemonic</button>
+        <button @click="reveal" :disabled="revealBusy" class="px-4 py-2 bg-red-600 text-white rounded disabled:opacity-50">🔓 نمایش Mnemonic</button>
       </div>
       <div class="bg-white rounded-xl shadow p-6 mb-6">
         <div class="grid grid-cols-2 gap-4 text-sm">
@@ -640,16 +641,12 @@ createApp({
       <div v-if="showReveal" class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
         <div class="bg-white rounded-xl shadow-xl max-w-lg w-full p-6">
           <h3 class="text-lg font-bold mb-4">🔓 نمایش Mnemonic</h3>
-          <div v-if="!revealedMnemonic">
-            <p class="text-sm text-slate-600 mb-4">رمز ادمین رو دوباره وارد کن.</p>
-            <input v-model="revealPassword" type="password" placeholder="رمز ادمین" class="w-full px-3 py-2 border rounded mb-3" />
-            <div v-if="revealError" class="text-red-600 text-sm mb-3">{{ revealError }}</div>
-            <div class="flex gap-2 justify-end">
-              <button @click="closeReveal" class="px-4 py-2 border rounded">انصراف</button>
-              <button @click="reveal" :disabled="revealBusy || !revealPassword" class="px-4 py-2 bg-red-600 text-white rounded disabled:opacity-50">{{ revealBusy ? '...' : 'نمایش' }}</button>
-            </div>
+          <div v-if="revealBusy" class="text-slate-600 text-sm">در حال بارگذاری...</div>
+          <div v-else-if="revealError">
+            <div class="text-red-600 text-sm mb-3">{{ revealError }}</div>
+            <button @click="closeReveal" class="w-full py-2 bg-slate-800 text-white rounded">بستن</button>
           </div>
-          <div v-else>
+          <div v-else-if="revealedMnemonic">
             <div class="bg-slate-100 p-4 rounded mono text-sm break-all">{{ revealedMnemonic }}</div>
             <button @click="closeReveal" class="mt-4 w-full py-2 bg-slate-800 text-white rounded">بستن</button>
           </div>
