@@ -33,7 +33,7 @@ async function main() {
   const hash = await hashPassword(DEFAULT_PASSWORD);
   const res = await pool.query<{ id: number }>(
     `INSERT INTO admins (username, password_hash, role, must_change_password)
-     VALUES ($1, $2, 'admin', true)
+     VALUES ($1, $2, 'super_admin', true)
      RETURNING id`,
     [DEFAULT_USERNAME, hash]
   );
