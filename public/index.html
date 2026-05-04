@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Wallet Admin Panel</title>
+  <link rel="icon" href="data:,">
+
   <script>
     (function () {
       try {
@@ -375,7 +377,18 @@ const fmt = (raw, decimals, precision = 6) => {
 createApp({
   setup() {
     const admin = ref(null);
-    const route = ref(location.hash.slice(1) || '/');
+    const parseHash = () => {
+      const raw = location.hash.slice(1) || '/';
+      const qIdx = raw.indexOf('?');
+      const path = qIdx >= 0 ? raw.slice(0, qIdx) : raw;
+      const query = qIdx >= 0
+        ? Object.fromEntries(new URLSearchParams(raw.slice(qIdx + 1)))
+        : {};
+      return { path: path || '/', query };
+    };
+    const initial = parseHash();
+    const route = ref(initial.path);
+    const routeQuery = ref(initial.query);
     const loading = ref(true);
     const theme = ref(document.documentElement.getAttribute('data-theme') || 'dark-2026');
 
@@ -388,7 +401,11 @@ createApp({
       applyTheme(theme.value);
     };
 
-    window.addEventListener('hashchange', () => { route.value = location.hash.slice(1) || '/'; });
+    window.addEventListener('hashchange', () => {
+      const p = parseHash();
+      route.value = p.path;
+      routeQuery.value = p.query;
+    });
     const navigate = (path) => { location.hash = path; };
 
     const checkAuth = async () => {
@@ -408,7 +425,7 @@ createApp({
       navigate('/login');
     };
 
-    return { admin, route, loading, navigate, logout, checkAuth, theme, toggleTheme };
+    return { admin, route, routeQuery, loading, navigate, logout, checkAuth, theme, toggleTheme };
   },
   template: `
     <div v-if="loading" class="flex items-center justify-center min-h-screen text-slate-500">بارگذاری...</div>
@@ -422,8 +439,10 @@ createApp({
           <a href="#/dashboard" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route === '/dashboard' ? 'bg-slate-800' : ''">📊 داشبورد</a>
           <a href="#/wallets" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route.startsWith('/wallets') ? 'bg-slate-800' : ''">💰 ولت‌ها</a>
           <a href="#/jobs" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route.startsWith('/jobs') ? 'bg-slate-800' : ''">⚙️ Jobs</a>
+          <a v-if="admin.role === 'super_admin'" href="#/templates" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route.startsWith('/templates') ? 'bg-slate-800' : ''">📋 Templates</a>
           <a href="#/benchmark" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route.startsWith('/benchmark') ? 'bg-slate-800' : ''">🎓 Benchmark</a>
           <a href="#/credentials" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route === '/credentials' ? 'bg-slate-800' : ''">🔐 API Keys</a>
+          <a href="#/test" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route === '/test' ? 'bg-slate-800' : ''">🧪 تست</a>
           <a href="#/change-password" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route === '/change-password' ? 'bg-slate-800' : ''">🔑 تغییر رمز</a>
         </nav>
         <div class="text-sm text-slate-400 mt-auto pt-4 border-t border-slate-700">
@@ -442,11 +461,13 @@ createApp({
         <login-page v-if="route === '/login'" @logged-in="checkAuth"></login-page>
         <change-password-page v-else-if="route === '/change-password'" @changed="checkAuth"></change-password-page>
         <dashboard-page v-else-if="route === '/dashboard'"></dashboard-page>
-        <wallets-page v-else-if="route === '/wallets'" @open="navigate($event)"></wallets-page>
+        <wallets-page v-else-if="route === '/wallets'" :query="routeQuery" @open="navigate($event)"></wallets-page>
         <wallet-detail-page v-else-if="route.startsWith('/wallets/')" :id="route.split('/')[2]" @back="navigate('/wallets')"></wallet-detail-page>
         <jobs-page v-else-if="route === '/jobs'"></jobs-page>
+        <templates-page v-else-if="route === '/templates' && admin.role === 'super_admin'"></templates-page>
         <benchmark-page v-else-if="route === '/benchmark'"></benchmark-page>
         <credentials-page v-else-if="route === '/credentials'"></credentials-page>
+        <test-page v-else-if="route === '/test'"></test-page>
         <div v-else class="text-slate-500">صفحه یافت نشد</div>
       </main>
     </div>
@@ -509,14 +530,25 @@ createApp({
 })
 .component('dashboard-page', {
   setup() {
-    const stats = ref(null), queueStats = ref(null);
+    const stats = ref(null), queueStats = ref(null), funded = ref([]);
+    const DECIMALS = { BTC: 8, ETH: 18, TRON: 6 };
     let timer = null;
     const load = async () => {
-      try { const [s, q] = await Promise.all([api('/api/stats'), api('/api/queue-stats')]); stats.value = s; queueStats.value = q; } catch {}
+      try {
+        const [s, q, f] = await Promise.all([
+          api('/api/stats'),
+          api('/api/queue-stats'),
+          api('/api/wallets/funded/top?limit=10'),
+        ]);
+        stats.value = s;
+        queueStats.value = q;
+        funded.value = f.wallets || [];
+      } catch {}
     };
     onMounted(() => { load(); timer = setInterval(load, 5000); });
     onUnmounted(() => clearInterval(timer));
-    return { stats, queueStats };
+    const viewAll = () => { location.hash = '/wallets?funded=1'; };
+    return { stats, queueStats, funded, fmt, DECIMALS, viewAll };
   },
   template: `
     <div>
@@ -539,18 +571,59 @@ createApp({
             </div>
           </div>
         </div>
+
+        <div class="bg-white p-6 rounded-xl shadow">
+          <div class="flex items-center justify-between mb-4">
+            <h3 class="text-lg font-bold">ولت‌های دارای موجودی</h3>
+            <button @click="viewAll" class="text-sm text-blue-600 hover:underline">مشاهده همه ←</button>
+          </div>
+          <div v-if="funded.length === 0" class="text-slate-400 text-sm py-6 text-center">هنوز هیچ ولتی موجودی نداره</div>
+          <div v-else class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="text-xs text-slate-500 border-b">
+                <tr>
+                  <th class="p-2 text-right">ID</th>
+                  <th class="p-2 text-right">کاربر</th>
+                  <th class="p-2 text-right">BTC</th>
+                  <th class="p-2 text-right">ETH</th>
+                  <th class="p-2 text-right">USDT (ETH)</th>
+                  <th class="p-2 text-right">TRX</th>
+                  <th class="p-2 text-right">USDT (TRON)</th>
+                  <th class="p-2 text-right">آدرس</th>
+                  <th class="p-2 text-right">آخرین تغییر</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="w in funded" :key="w.id" class="border-b hover:bg-slate-50">
+                  <td class="p-2 mono"><a :href="'#/wallets/' + w.id" class="text-blue-600 hover:underline">{{ w.id }}</a></td>
+                  <td class="p-2 mono">{{ w.user_id }}</td>
+                  <td class="p-2 mono">{{ fmt(w.btc_native, DECIMALS.BTC) }}</td>
+                  <td class="p-2 mono">{{ fmt(w.eth_native, DECIMALS.ETH) }}</td>
+                  <td class="p-2 mono">{{ fmt(w.eth_usdt, 6) }}</td>
+                  <td class="p-2 mono">{{ fmt(w.tron_native, DECIMALS.TRON) }}</td>
+                  <td class="p-2 mono">{{ fmt(w.tron_usdt, 6) }}</td>
+                  <td class="p-2 mono text-slate-500">{{ w.funded_address_count }}</td>
+                  <td class="p-2 text-slate-500 text-xs">{{ w.last_balance_change_at ? new Date(w.last_balance_change_at).toLocaleString('fa-IR') : '—' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   `,
 })
 .component('wallets-page', {
+  props: ['query'],
   emits: ['open'],
-  setup(_, { emit }) {
+  setup(props, { emit }) {
     const data = ref({ wallets: [], pagination: { total: 0 } });
-    const filter = reactive({ wordCount: '' });
+    const initialFunded = props.query?.funded === '1' || props.query?.funded === 'true';
+    const filter = reactive({ wordCount: '', fundedOnly: initialFunded });
     const load = async () => {
       const qs = new URLSearchParams({ page: '1', per_page: '20' });
       if (filter.wordCount) qs.set('word_count', filter.wordCount);
+      if (filter.fundedOnly) qs.set('funded_only', '1');
       try { data.value = await api('/api/wallets?' + qs); } catch {}
     };
     onMounted(load);
@@ -560,9 +633,15 @@ createApp({
     <div>
       <div class="flex items-center justify-between mb-6">
         <h2 class="text-2xl font-bold">ولت‌ها</h2>
-        <select v-model="filter.wordCount" @change="load" class="px-3 py-2 border rounded bg-white">
-          <option value="">همه</option><option value="12">۱۲</option><option value="24">۲۴</option>
-        </select>
+        <div class="flex items-center gap-3">
+          <label class="flex items-center gap-2 text-sm">
+            <input type="checkbox" v-model="filter.fundedOnly" @change="load" />
+            فقط دارای موجودی
+          </label>
+          <select v-model="filter.wordCount" @change="load" class="px-3 py-2 border rounded bg-white">
+            <option value="">همه</option><option value="12">۱۲</option><option value="24">۲۴</option>
+          </select>
+        </div>
       </div>
       <div class="bg-white rounded-xl shadow overflow-hidden">
         <table class="w-full text-sm">
@@ -712,6 +791,286 @@ createApp({
             <div><label class="block text-sm mb-1">User ID شروع</label><input v-model="form.startUserId" type="number" placeholder="اختیاری" class="w-full px-3 py-2 border rounded" /></div>
             <div v-if="newError" class="text-red-600 text-sm">{{ newError }}</div>
             <div class="flex gap-2 justify-end"><button type="button" @click="showNew = false" class="px-4 py-2 border rounded">انصراف</button><button type="submit" :disabled="newBusy" class="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50">{{ newBusy ? '...' : 'شروع' }}</button></div>
+          </form>
+        </div>
+      </div>
+    </div>
+  `,
+})
+.component('templates-page', {
+  setup() {
+    const items = ref([]);
+    const cb = ref({ enabled: true, source: 'default' });
+    const showForm = ref(false);
+    const editing = ref(null);
+    const form = reactive({
+      name: '',
+      enabled: true,
+      triggerType: 'manual',
+      cronExpr: '',
+      cooldownHours: 24,
+      spec: { wordCount: 12, addressesPerWallet: 1, count: 100, startUserId: '', chunkSize: 250 },
+    });
+    const formError = ref('');
+    const formBusy = ref(false);
+
+    const load = async () => {
+      try {
+        const r = await api('/api/batch-templates');
+        items.value = r.items || [];
+        cb.value = await api('/api/system/auto-batch');
+      } catch (e) { /* ignore */ }
+    };
+
+    const resetForm = () => {
+      form.name = '';
+      form.enabled = true;
+      form.triggerType = 'manual';
+      form.cronExpr = '';
+      form.cooldownHours = 24;
+      form.spec.wordCount = 12;
+      form.spec.addressesPerWallet = 1;
+      form.spec.count = 100;
+      form.spec.startUserId = '';
+      form.spec.chunkSize = 250;
+      formError.value = '';
+    };
+
+    const startNew = () => { editing.value = null; resetForm(); showForm.value = true; };
+
+    const startEdit = (t) => {
+      editing.value = t;
+      form.name = t.name;
+      form.enabled = t.enabled;
+      form.triggerType = t.triggerType;
+      form.cronExpr = t.cronExpr || '';
+      form.cooldownHours = t.cooldownHours == null ? '' : t.cooldownHours;
+      form.spec.wordCount = t.spec.wordCount;
+      form.spec.addressesPerWallet = t.spec.addressesPerWallet;
+      form.spec.count = t.spec.count;
+      form.spec.startUserId = t.spec.startUserId ?? '';
+      form.spec.chunkSize = t.spec.chunkSize ?? 250;
+      formError.value = '';
+      showForm.value = true;
+    };
+
+    const submit = async () => {
+      formError.value = ''; formBusy.value = true;
+      try {
+        const spec = {
+          wordCount: Number(form.spec.wordCount),
+          addressesPerWallet: Number(form.spec.addressesPerWallet),
+          count: Number(form.spec.count),
+        };
+        if (form.spec.startUserId !== '' && form.spec.startUserId != null) spec.startUserId = Number(form.spec.startUserId);
+        if (form.spec.chunkSize !== '' && form.spec.chunkSize != null) spec.chunkSize = Number(form.spec.chunkSize);
+        const body = {
+          name: form.name.trim(),
+          enabled: !!form.enabled,
+          spec,
+          triggerType: form.triggerType,
+          cooldownHours: form.cooldownHours === '' || form.cooldownHours == null ? null : Number(form.cooldownHours),
+        };
+        if (form.triggerType === 'cron') body.cronExpr = form.cronExpr.trim();
+        if (editing.value) {
+          await api('/api/batch-templates/' + editing.value.id, { method: 'PATCH', body });
+        } else {
+          await api('/api/batch-templates', { method: 'POST', body });
+        }
+        showForm.value = false;
+        await load();
+      } catch (e) { formError.value = e.message || 'خطا'; } finally { formBusy.value = false; }
+    };
+
+    const toggleEnabled = async (t) => {
+      try { await api('/api/batch-templates/' + t.id, { method: 'PATCH', body: { enabled: !t.enabled } }); await load(); }
+      catch (e) { alert(e.message || 'خطا'); }
+    };
+
+    const remove = async (t) => {
+      if (!confirm('حذف template "' + t.name + '"؟')) return;
+      try { await api('/api/batch-templates/' + t.id, { method: 'DELETE' }); await load(); }
+      catch (e) { alert(e.message || 'خطا'); }
+    };
+
+    const runNow = async (t) => {
+      try {
+        const r = await api('/api/batch-templates/' + t.id + '/run', { method: 'POST' });
+        if (r.reused) alert('یه job قبلاً در حال اجراست: #' + r.jobDbId);
+        else alert('Job شروع شد: #' + r.jobDbId + ' (' + r.chunksTotal + ' chunk × ' + r.chunkSize + ')');
+        await load();
+      } catch (e) { alert(e.message || 'خطا'); }
+    };
+
+    const toggleCircuitBreaker = async () => {
+      if (cb.value.source === 'env') {
+        alert('AUTO_BATCH از طریق env کنترل می‌شه. اول env رو unset کن.');
+        return;
+      }
+      try {
+        cb.value = await api('/api/system/auto-batch', { method: 'PUT', body: { enabled: !cb.value.enabled } });
+      } catch (e) { alert(e.message || 'خطا'); }
+    };
+
+    const fmtTime = (s) => {
+      if (!s) return '-';
+      try { return new Date(s).toLocaleString(); } catch { return s; }
+    };
+
+    let timer = null;
+    onMounted(() => { load(); timer = setInterval(load, 5000); });
+    onUnmounted(() => clearInterval(timer));
+
+    return {
+      items, cb, showForm, editing, form, formError, formBusy,
+      startNew, startEdit, submit, toggleEnabled, remove, runNow, toggleCircuitBreaker, fmtTime,
+    };
+  },
+  template: `
+    <div>
+      <div class="flex items-center justify-between mb-6">
+        <h2 class="text-2xl font-bold">📋 Templates</h2>
+        <div class="flex items-center gap-3">
+          <div class="text-sm flex items-center gap-2">
+            <span>Auto-batch:</span>
+            <button @click="toggleCircuitBreaker" :class="cb.enabled ? 'bg-emerald-600' : 'bg-red-600'" class="text-white px-3 py-1 rounded text-xs">
+              {{ cb.enabled ? 'فعال' : 'غیرفعال' }} <span class="opacity-70">({{ cb.source }})</span>
+            </button>
+          </div>
+          <button @click="startNew" class="px-4 py-2 bg-blue-600 text-white rounded">➕ Template جدید</button>
+        </div>
+      </div>
+
+      <div v-if="!cb.enabled" class="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-800">
+        ⚠ AUTO_BATCH غیرفعاله — هیچ template ای fire نمی‌شه (نه startup، نه cron، نه Run Now).
+      </div>
+
+      <div class="bg-white rounded-xl shadow overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 border-b">
+            <tr>
+              <th class="p-3 text-right">نام</th>
+              <th class="p-3 text-right">trigger</th>
+              <th class="p-3 text-right">برنامه</th>
+              <th class="p-3 text-right">spec</th>
+              <th class="p-3 text-right">آخرین اجرا</th>
+              <th class="p-3 text-right">آخرین job</th>
+              <th class="p-3 text-right">فعال</th>
+              <th class="p-3 text-right">عملیات</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="t in items" :key="t.id" class="border-b hover:bg-slate-50">
+              <td class="p-3"><div class="font-bold">{{ t.name }}</div><div class="text-xs text-slate-500 mono">#{{ t.id }}</div></td>
+              <td class="p-3"><span class="px-2 py-0.5 rounded text-xs bg-slate-100">{{ t.triggerType }}</span></td>
+              <td class="p-3 mono text-xs">
+                <span v-if="t.triggerType === 'cron'">{{ t.cronExpr }}</span>
+                <span v-else-if="t.triggerType === 'on_startup'">cooldown: {{ t.cooldownHours == null ? '24h (default)' : t.cooldownHours + 'h' }}</span>
+                <span v-else class="text-slate-400">—</span>
+              </td>
+              <td class="p-3 text-xs">
+                count={{ t.spec.count }} · words={{ t.spec.wordCount }} · addr={{ t.spec.addressesPerWallet }}
+                <span v-if="t.spec.chunkSize"> · chunk={{ t.spec.chunkSize }}</span>
+              </td>
+              <td class="p-3 text-xs">{{ fmtTime(t.lastRunAt) }}</td>
+              <td class="p-3 mono text-xs">
+                <a v-if="t.lastJobId" href="#/jobs" class="text-blue-600 hover:underline">#{{ t.lastJobId }}</a>
+                <span v-else class="text-slate-400">—</span>
+              </td>
+              <td class="p-3">
+                <button @click="toggleEnabled(t)" :class="t.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'" class="px-2 py-0.5 rounded text-xs">
+                  {{ t.enabled ? 'on' : 'off' }}
+                </button>
+              </td>
+              <td class="p-3">
+                <div class="flex gap-1">
+                  <button @click="runNow(t)" class="px-2 py-1 bg-blue-600 text-white rounded text-xs" :disabled="!cb.enabled || !t.enabled">▶ Run</button>
+                  <button @click="startEdit(t)" class="px-2 py-1 border rounded text-xs">ویرایش</button>
+                  <button @click="remove(t)" class="px-2 py-1 border border-red-300 text-red-600 rounded text-xs">حذف</button>
+                </div>
+              </td>
+            </tr>
+            <tr v-if="items.length === 0">
+              <td colspan="8" class="p-6 text-center text-slate-400">هنوز template ای نساختی</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div v-if="showForm" class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 max-h-[90vh] overflow-auto">
+          <h3 class="text-lg font-bold mb-4">{{ editing ? 'ویرایش template' : 'Template جدید' }}</h3>
+          <form @submit.prevent="submit" class="space-y-3">
+            <div>
+              <label class="block text-sm mb-1">نام</label>
+              <input v-model="form.name" required maxlength="100" class="w-full px-3 py-2 border rounded" placeholder="مثلاً: روزانه ۱۰۰۰ ولت" />
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-sm mb-1">trigger</label>
+                <select v-model="form.triggerType" class="w-full px-3 py-2 border rounded bg-white">
+                  <option value="manual">manual</option>
+                  <option value="on_startup">on_startup</option>
+                  <option value="cron">cron</option>
+                </select>
+              </div>
+              <div class="flex items-end">
+                <label class="flex items-center gap-2 text-sm">
+                  <input v-model="form.enabled" type="checkbox" />
+                  فعال
+                </label>
+              </div>
+            </div>
+            <div v-if="form.triggerType === 'cron'">
+              <label class="block text-sm mb-1">cron expression (۵ یا ۶ فیلد)</label>
+              <input v-model="form.cronExpr" required class="w-full px-3 py-2 border rounded mono" placeholder="0 2 * * 0  (یکشنبه ۲ بامداد)" />
+              <div class="text-xs text-slate-500 mt-1">نمونه: <span class="mono">0 2 * * *</span> هر روز ۲ بامداد، <span class="mono">*/30 * * * *</span> هر ۳۰ دقیقه</div>
+            </div>
+            <div v-if="form.triggerType === 'on_startup'">
+              <label class="block text-sm mb-1">cooldown (ساعت)</label>
+              <input v-model="form.cooldownHours" type="number" min="0" placeholder="پیش‌فرض ۲۴" class="w-full px-3 py-2 border rounded" />
+              <div class="text-xs text-slate-500 mt-1">برای جلوگیری از اجرای مجدد روی worker restart. ۰ = همیشه fire.</div>
+            </div>
+
+            <div class="border-t pt-3 mt-2">
+              <div class="text-sm font-bold mb-2">spec</div>
+              <div class="grid grid-cols-3 gap-3">
+                <div>
+                  <label class="block text-sm mb-1">تعداد</label>
+                  <input v-model="form.spec.count" type="number" min="1" max="10000" required class="w-full px-3 py-2 border rounded" />
+                </div>
+                <div>
+                  <label class="block text-sm mb-1">کلمات</label>
+                  <select v-model="form.spec.wordCount" class="w-full px-3 py-2 border rounded bg-white">
+                    <option :value="12">۱۲</option>
+                    <option :value="24">۲۴</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-sm mb-1">آدرس/ولت</label>
+                  <input v-model="form.spec.addressesPerWallet" type="number" min="1" max="20" class="w-full px-3 py-2 border rounded" />
+                </div>
+              </div>
+              <div class="grid grid-cols-2 gap-3 mt-3">
+                <div>
+                  <label class="block text-sm mb-1">User ID شروع</label>
+                  <input v-model="form.spec.startUserId" type="number" placeholder="اختیاری (auto)" class="w-full px-3 py-2 border rounded" />
+                </div>
+                <div>
+                  <label class="block text-sm mb-1">chunk size</label>
+                  <input v-model="form.spec.chunkSize" type="number" min="1" max="5000" class="w-full px-3 py-2 border rounded" />
+                </div>
+              </div>
+              <div class="text-xs text-slate-500 mt-2">سقف سمت سرور: ۱۰٬۰۰۰ ولت. در صورت bypass UI همچنان enforced.</div>
+            </div>
+
+            <div v-if="formError" class="text-red-600 text-sm">{{ formError }}</div>
+            <div class="flex gap-2 justify-end pt-2">
+              <button type="button" @click="showForm = false" class="px-4 py-2 border rounded">انصراف</button>
+              <button type="submit" :disabled="formBusy" class="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50">
+                {{ formBusy ? '...' : (editing ? 'ذخیره' : 'ساخت') }}
+              </button>
+            </div>
           </form>
         </div>
       </div>
@@ -1024,6 +1383,136 @@ createApp({
               <button type="submit" :disabled="gbBusy || !gbForm.config.trim()" class="px-4 py-2 bg-indigo-600 text-white rounded disabled:opacity-50">{{ gbBusy ? '...' : 'ایمپورت' }}</button>
             </div>
           </form>
+        </div>
+      </div>
+    </div>
+  `,
+})
+.component('test-page', {
+  setup() {
+    const mnemonic = ref('');
+    const addressCount = ref(5);
+    const busy = ref(false);
+    const error = ref('');
+    const result = ref(null);
+    const DECIMALS = { BTC: 8, TRON: 6 };
+    const submit = async () => {
+      error.value = ''; result.value = null; busy.value = true;
+      try {
+        const r = await api('/api/test/wallet-flow', {
+          method: 'POST',
+          body: { mnemonic: mnemonic.value, address_count: Number(addressCount.value) || 5 },
+        });
+        result.value = r;
+      } catch (e) {
+        error.value = e.message || 'خطا';
+        if (e.data && e.data.steps) result.value = e.data;
+      } finally {
+        busy.value = false;
+      }
+    };
+    const clear = () => { mnemonic.value = ''; result.value = null; error.value = ''; };
+    return { mnemonic, addressCount, busy, error, result, submit, clear, fmt, DECIMALS };
+  },
+  template: `
+    <div>
+      <div class="mb-6">
+        <h2 class="text-2xl font-bold">🧪 تست فلوی ولت (Dry-run)</h2>
+        <p class="text-sm text-slate-500 mt-2">
+          mnemonic رو وارد کن تا از همون مسیر تولید/derivation/balance ولت‌های واقعی رد بشه.
+          هیچ چیزی توی دیتابیس ذخیره نمی‌شه و توی لیست «ولت‌های دارای موجودی» ظاهر نمی‌شه.
+        </p>
+      </div>
+      <div class="bg-white rounded-xl shadow p-6 mb-6">
+        <form @submit.prevent="submit" class="space-y-4">
+          <div>
+            <label class="block text-sm mb-1">Mnemonic (۱۲ یا ۲۴ کلمه)</label>
+            <textarea v-model="mnemonic" required rows="3" dir="ltr"
+              class="w-full px-3 py-2 border rounded mono text-sm"
+              placeholder="word1 word2 word3 ... "></textarea>
+          </div>
+          <div class="flex items-center gap-4">
+            <label class="text-sm">تعداد آدرس در هر شبکه:</label>
+            <input v-model.number="addressCount" type="number" min="1" max="20"
+              class="w-20 px-3 py-2 border rounded" />
+            <span class="text-xs text-slate-400">حداکثر ۲۰ — برای BTC هر سه نوع (legacy/p2sh/segwit) تولید می‌شه</span>
+          </div>
+          <div class="flex gap-2">
+            <button :disabled="busy || !mnemonic.trim()" type="submit"
+              class="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50">
+              {{ busy ? 'در حال اجرا...' : '▶ اجرای فلو' }}
+            </button>
+            <button type="button" @click="clear" class="px-4 py-2 border rounded">پاک کردن</button>
+          </div>
+        </form>
+      </div>
+
+      <div v-if="error" class="bg-red-50 border-r-4 border-red-500 p-4 rounded mb-4">
+        <strong class="text-red-700">خطا:</strong> {{ error }}
+      </div>
+
+      <div v-if="result" class="space-y-6">
+        <div class="bg-white rounded-xl shadow p-6">
+          <h3 class="font-bold mb-3">مراحل اجرا</h3>
+          <table class="w-full text-sm">
+            <thead class="text-xs text-slate-500 border-b">
+              <tr><th class="p-2 text-right">مرحله</th><th class="p-2 text-right">وضعیت</th><th class="p-2 text-right">زمان (ms)</th><th class="p-2 text-right">جزئیات</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="s in result.steps" :key="s.step" class="border-b">
+                <td class="p-2 mono">{{ s.step }}</td>
+                <td class="p-2"><span :class="s.ok ? 'text-emerald-600' : 'text-red-600'">{{ s.ok ? '✔' : '✗' }}</span></td>
+                <td class="p-2 mono">{{ s.duration_ms }}</td>
+                <td class="p-2 text-xs mono text-slate-600">{{ s.error || JSON.stringify(s.details || {}) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div v-if="result.totals" class="bg-white rounded-xl shadow p-6">
+          <h3 class="font-bold mb-3">جمع کل به تفکیک شبکه</h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="p-4 bg-slate-50 rounded">
+              <div class="text-xs text-slate-500 mb-1">BTC</div>
+              <div class="mono">{{ fmt(result.totals.BTC.native, DECIMALS.BTC) }} BTC</div>
+            </div>
+            <div class="p-4 bg-slate-50 rounded">
+              <div class="text-xs text-slate-500 mb-1">TRON</div>
+              <div class="mono">{{ fmt(result.totals.TRON.native, DECIMALS.TRON) }} TRX</div>
+              <div class="mono text-xs text-slate-600">{{ fmt(result.totals.TRON.usdt, 6) }} USDT</div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="result.addresses" v-for="chain in ['BTC', 'TRON']" :key="chain"
+             class="bg-white rounded-xl shadow p-6">
+          <h3 class="font-bold mb-3">آدرس‌های {{ chain }} ({{ result.addresses[chain].length }})</h3>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead class="text-xs text-slate-500 border-b">
+                <tr>
+                  <th class="p-2 text-right">idx</th>
+                  <th v-if="chain === 'BTC'" class="p-2 text-right">نوع</th>
+                  <th class="p-2 text-right">path</th>
+                  <th class="p-2 text-right">آدرس</th>
+                  <th class="p-2 text-right">{{ chain === 'BTC' ? 'BTC' : 'TRX' }}</th>
+                  <th v-if="chain !== 'BTC'" class="p-2 text-right">USDT</th>
+                  <th class="p-2 text-right">fetched</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="a in result.addresses[chain]" :key="a.path" class="border-b hover:bg-slate-50">
+                  <td class="p-2 mono">{{ a.index }}</td>
+                  <td v-if="chain === 'BTC'" class="p-2 mono text-xs">{{ a.btc_address_type }}</td>
+                  <td class="p-2 mono text-xs text-slate-600">{{ a.path }}</td>
+                  <td class="p-2 mono text-xs" dir="ltr">{{ a.address }}</td>
+                  <td class="p-2 mono">{{ fmt(a.native, DECIMALS[chain]) }}</td>
+                  <td v-if="chain !== 'BTC'" class="p-2 mono">{{ fmt(a.usdt, 6) }}</td>
+                  <td class="p-2"><span :class="a.fetched ? 'text-emerald-600' : 'text-amber-600'">{{ a.fetched ? '✔' : '—' }}</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>

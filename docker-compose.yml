@@ -33,6 +33,8 @@ services:
       - ./src/db/migrations/008_drop_dead_btc_rpc.sql:/docker-entrypoint-initdb.d/08-drop-btc-rpc.sql:ro
       - ./src/db/migrations/009_benchmark_allowed.sql:/docker-entrypoint-initdb.d/09-benchmark-allowed.sql:ro
       - ./src/db/migrations/010_addresses_btc_address_type.sql:/docker-entrypoint-initdb.d/10-btc-address-type.sql:ro
+      - ./src/db/migrations/011_chunked_jobs.sql:/docker-entrypoint-initdb.d/11-chunked-jobs.sql:ro
+      - ./src/db/migrations/012_batch_templates.sql:/docker-entrypoint-initdb.d/12-batch-templates.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-postgres}"]
       interval: 5s
@@ -88,8 +90,17 @@ services:
       WALLET_MASTER_KEY_V2: ${WALLET_MASTER_KEY_V2:-}
       JWT_SECRET: ${JWT_SECRET:-}
       COOKIE_SECRET: ${COOKIE_SECRET:-}
+      BTC_BALANCE_PROVIDER: ${BTC_BALANCE_PROVIDER:-esplora}
+      BTC_ESPLORA_URL: ${BTC_ESPLORA_URL:-}
+      BTC_BLOCKCHAIN_INFO_URL: ${BTC_BLOCKCHAIN_INFO_URL:-}
+      BTC_BALANCE_CONCURRENCY: ${BTC_BALANCE_CONCURRENCY:-10}
+      BTC_INTERCHUNK_DELAY_MS: ${BTC_INTERCHUNK_DELAY_MS:-100}
+      BTC_BATCH_SIZE: ${BTC_BATCH_SIZE:-100}
+      AUTO_BATCH_ENABLED: ${AUTO_BATCH_ENABLED:-}
     expose:
       - "3000"
+    ports:
+      - "3000:3000"
     networks:
       - backend
     healthcheck:
@@ -128,9 +139,18 @@ services:
       WALLET_MASTER_KEY_V1: ${WALLET_MASTER_KEY_V1:-}
       WALLET_MASTER_KEY_V2: ${WALLET_MASTER_KEY_V2:-}
       JWT_SECRET: ${JWT_SECRET:-}
-      GEN_CONCURRENCY: ${GEN_CONCURRENCY:-2}
-      BALANCE_CONCURRENCY: ${BALANCE_CONCURRENCY:-3}
+      GEN_CONCURRENCY: ${GEN_CONCURRENCY:-}
+      WALLET_DERIVATION_POOL_SIZE: ${WALLET_DERIVATION_POOL_SIZE:-}
+      BALANCE_CONCURRENCY: ${BALANCE_CONCURRENCY:-5}
+      BALANCE_BATCH_SIZE: ${BALANCE_BATCH_SIZE:-200}
       BALANCE_CHECK_INTERVAL_SEC: ${BALANCE_CHECK_INTERVAL_SEC:-30}
+      BTC_BALANCE_PROVIDER: ${BTC_BALANCE_PROVIDER:-esplora}
+      BTC_ESPLORA_URL: ${BTC_ESPLORA_URL:-}
+      BTC_BLOCKCHAIN_INFO_URL: ${BTC_BLOCKCHAIN_INFO_URL:-}
+      BTC_BALANCE_CONCURRENCY: ${BTC_BALANCE_CONCURRENCY:-10}
+      BTC_INTERCHUNK_DELAY_MS: ${BTC_INTERCHUNK_DELAY_MS:-100}
+      BTC_BATCH_SIZE: ${BTC_BATCH_SIZE:-100}
+      AUTO_BATCH_ENABLED: ${AUTO_BATCH_ENABLED:-}
       TRONGRID_API_KEYS: ${TRONGRID_API_KEYS:-}
     networks:
       - backend

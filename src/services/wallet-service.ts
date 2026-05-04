@@ -25,6 +25,7 @@ import {
   type Chain,
   type DerivedAddress,
 } from '../wallet/derivation.js';
+import { deriveManyParallel } from '../wallet/derivation-pool.js';
 import {
   encryptMnemonic,
   decryptMnemonic,
@@ -33,7 +34,9 @@ import {
 } from '../crypto/aes.js';
 import { batchBtcBalances } from '../balance/btc.js';
 
-const ALL_CHAINS: Chain[] = ['BTC', 'ETH', 'TRON'];
+// ETH disabled: provider RPCs unreliable (Cloudflare-blocked), no ERC-20 sweep yet.
+// New wallets only generate BTC + TRON addresses. Existing ETH rows are untouched.
+const ALL_CHAINS: Chain[] = ['BTC', 'TRON'];
 
 // سقف scan برای import — تا این تعداد index از هر نوع BTC (legacy/p2sh)
 // آدرس می‌سازیم و بالانس می‌گیریم. اگه بیشتر از این خواست، کاربر باید
@@ -235,6 +238,7 @@ async function persistWallet(
     fromIndex: 0,
     count: initialAddressCount,
   }));
+  // مسیر تک‌ولتی: همون thread اصلی (نمی‌ارزه برای یه ولت worker spawn کنیم).
   const addresses = await deriveMany(mnemonic, requests);
   const enc = encryptMnemonic(mnemonic);
 
@@ -242,13 +246,16 @@ async function persistWallet(
   try {
     await client.query('BEGIN');
 
+    const nextIdx = (chain: Chain) =>
+      ALL_CHAINS.includes(chain) ? initialAddressCount : 0;
     const walletRes = await client.query<{ id: string }>(
       `INSERT INTO wallets
         (user_id, word_count, mnemonic_ciphertext, mnemonic_nonce, mnemonic_tag,
          encryption_version, next_index_btc, next_index_eth, next_index_tron)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $7)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING id`,
-      [userId, wordCount, enc.ciphertext, enc.nonce, enc.tag, enc.version, initialAddressCount]
+      [userId, wordCount, enc.ciphertext, enc.nonce, enc.tag, enc.version,
+       nextIdx('BTC'), nextIdx('ETH'), nextIdx('TRON')]
     );
     const walletId = Number(walletRes.rows[0].id);
 
@@ -375,6 +382,160 @@ export async function getNewDepositAddress(
   void lazyReEncrypt(walletId, slot.enc, mnemonic);
 
   return derived;
+}
+
+// ─────────────────────────── Batch creation (chunk-mode) ───────────────────────────
+
+export interface CreateWalletsBatchOptions {
+  startUserId: number;
+  count: number;
+  wordCount: 12 | 24;
+  addressesPerWallet: number;
+}
+
+export interface CreateWalletsBatchResult {
+  completed: number;
+  failed: number;
+  /** فقط چند خطای اول رو نگه می‌داریم تا UI شلوغ نشه. */
+  errors: string[];
+}
+
+/**
+ * یه chunk از ولت‌ها رو در یک تراکنش می‌سازه:
+ *   1) generateMnemonic × count تو thread اصلی (سریع)
+ *   2) derive همه آدرس‌ها به صورت موازی روی worker_threads pool (PBKDF2 سنگین)
+ *   3) encrypt همه‌ی mnemonic‌ها
+ *   4) یک BEGIN، یک INSERT … FROM unnest(...) برای wallets با RETURNING id, user_id
+ *   5) ساخت آرایه‌های addresses با map از user_id → wallet_id
+ *   6) یک INSERT … FROM unnest(...) برای addresses
+ *   7) COMMIT
+ *
+ * Failure mode: اگه هر مرحله fail کنه، کل chunk rollback می‌شه (failed=count).
+ * BullMQ خودش retry می‌کنه (attempts=3). برای ولت‌های فریش collision عملاً صفره
+ * (mnemonic random و startUserId قبل از enqueue چک شده).
+ */
+export async function createWalletsBatch(
+  opts: CreateWalletsBatchOptions
+): Promise<CreateWalletsBatchResult> {
+  const { startUserId, count, wordCount, addressesPerWallet } = opts;
+
+  if (count <= 0) return { completed: 0, failed: 0, errors: [] };
+  if (addressesPerWallet < 1 || addressesPerWallet > 100) {
+    throw new Error('addressesPerWallet باید بین 1 و 100 باشه');
+  }
+
+  // 1) mnemonic ها
+  const mnemonics: string[] = new Array(count);
+  for (let i = 0; i < count; i++) mnemonics[i] = generateMnemonic(wordCount);
+
+  // 2) derive موازی
+  const requests = ALL_CHAINS.map((c) => ({
+    chain: c,
+    fromIndex: 0,
+    count: addressesPerWallet,
+  }));
+
+  let derivedPerWallet: DerivedAddress[][];
+  try {
+    derivedPerWallet = await Promise.all(
+      mnemonics.map((m) => deriveManyParallel(m, requests))
+    );
+  } catch (e) {
+    return {
+      completed: 0,
+      failed: count,
+      errors: [`derivation failed: ${(e as Error).message}`],
+    };
+  }
+
+  // 3) encrypt
+  const encrypted = mnemonics.map((m) => encryptMnemonic(m));
+
+  // 4-7) batched INSERT
+  const userIds = new Array<number>(count);
+  for (let i = 0; i < count; i++) userIds[i] = startUserId + i;
+  const wordCounts = new Array(count).fill(wordCount);
+  const ciphertexts = encrypted.map((e) => e.ciphertext);
+  const nonces = encrypted.map((e) => e.nonce);
+  const tags = encrypted.map((e) => e.tag);
+  const versions = encrypted.map((e) => e.version);
+  const nbtc = new Array(count).fill(ALL_CHAINS.includes('BTC') ? addressesPerWallet : 0);
+  const neth = new Array(count).fill(ALL_CHAINS.includes('ETH') ? addressesPerWallet : 0);
+  const ntron = new Array(count).fill(ALL_CHAINS.includes('TRON') ? addressesPerWallet : 0);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const wRes = await client.query<{ id: string; user_id: string }>(
+      `INSERT INTO wallets
+         (user_id, word_count, mnemonic_ciphertext, mnemonic_nonce, mnemonic_tag,
+          encryption_version, next_index_btc, next_index_eth, next_index_tron)
+       SELECT * FROM UNNEST(
+         $1::bigint[], $2::smallint[],
+         $3::bytea[], $4::bytea[], $5::bytea[], $6::smallint[],
+         $7::int[], $8::int[], $9::int[]
+       ) AS v(user_id, word_count, ciphertext, nonce, tag, version, nbtc, neth, ntron)
+       RETURNING id, user_id`,
+      [userIds, wordCounts, ciphertexts, nonces, tags, versions, nbtc, neth, ntron]
+    );
+
+    if (wRes.rows.length !== count) {
+      throw new Error(
+        `wallet INSERT returned ${wRes.rows.length} rows, expected ${count}`
+      );
+    }
+
+    const idByUser = new Map<number, number>();
+    for (const r of wRes.rows) idByUser.set(Number(r.user_id), Number(r.id));
+
+    const addrWalletId: number[] = [];
+    const addrChain: string[] = [];
+    const addrIdx: number[] = [];
+    const addrPath: string[] = [];
+    const addrAddress: string[] = [];
+    const addrType: (string | null)[] = [];
+
+    for (let i = 0; i < count; i++) {
+      const userId = startUserId + i;
+      const walletId = idByUser.get(userId);
+      if (walletId === undefined) {
+        throw new Error(`returned wallets miss user_id=${userId}`);
+      }
+      const list = derivedPerWallet[i];
+      for (const a of list) {
+        addrWalletId.push(walletId);
+        addrChain.push(a.chain);
+        addrIdx.push(a.index);
+        addrPath.push(a.path);
+        addrAddress.push(a.address);
+        addrType.push(a.chain === 'BTC' ? (a.btcAddressType ?? 'segwit') : null);
+      }
+    }
+
+    if (addrWalletId.length > 0) {
+      await client.query(
+        `INSERT INTO addresses
+           (wallet_id, chain, derivation_index, derivation_path, address, address_type)
+         SELECT * FROM UNNEST(
+           $1::bigint[], $2::text[], $3::int[], $4::text[], $5::text[], $6::text[]
+         ) AS v(wallet_id, chain, derivation_index, derivation_path, address, address_type)`,
+        [addrWalletId, addrChain, addrIdx, addrPath, addrAddress, addrType]
+      );
+    }
+
+    await client.query('COMMIT');
+    return { completed: count, failed: 0, errors: [] };
+  } catch (e) {
+    await client.query('ROLLBACK');
+    return {
+      completed: 0,
+      failed: count,
+      errors: [(e as Error).message],
+    };
+  } finally {
+    client.release();
+  }
 }
 
 export async function revealMnemonic(walletId: number): Promise<string> {

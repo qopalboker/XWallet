@@ -1,6 +1,7 @@
 /**
  * Wallet routes:
  *   GET  /api/wallets              — list with filter/pagination
+ *   GET  /api/wallets/funded/top   — top-N most-recently-funded wallets
  *   GET  /api/wallets/:id          — detail with addresses
  *   POST /api/wallets              — create new wallet for user
  *   POST /api/wallets/:id/addresses — generate new deposit address
@@ -30,7 +31,7 @@ export default async function walletRoutes(fastify: FastifyInstance) {
 
   // GET /
   fastify.get<{
-    Querystring: { word_count?: string; user_id?: string; page?: string; per_page?: string };
+    Querystring: { word_count?: string; user_id?: string; funded_only?: string; page?: string; per_page?: string };
   }>('/', { preHandler: authed }, async (req) => {
     const page = Math.max(1, Number(req.query.page) || 1);
     const perPage = Math.min(100, Math.max(1, Number(req.query.per_page) || 20));
@@ -50,6 +51,13 @@ export default async function walletRoutes(fastify: FastifyInstance) {
     if (req.query.user_id) {
       conditions.push(`w.user_id = $${p++}`);
       params.push(Number(req.query.user_id));
+    }
+    if (req.query.funded_only === '1' || req.query.funded_only === 'true') {
+      conditions.push(
+        `EXISTS (SELECT 1 FROM addresses a
+                 WHERE a.wallet_id = w.id
+                   AND (a.native_balance > 0 OR a.usdt_balance > 0))`
+      );
     }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -77,6 +85,34 @@ export default async function walletRoutes(fastify: FastifyInstance) {
       },
     };
   });
+
+  // GET /funded/top — top-N wallets ranked by most recent balance change.
+  // Native + USDT totals are summed per chain (BigInt-safe strings).
+  fastify.get<{ Querystring: { limit?: string } }>(
+    '/funded/top',
+    { preHandler: authed },
+    async (req) => {
+      const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 10));
+      const res = await pool.query(
+        `SELECT w.id, w.user_id, w.word_count, w.created_at,
+                COALESCE(SUM(CASE WHEN a.chain='BTC'  THEN a.native_balance END), 0)::text AS btc_native,
+                COALESCE(SUM(CASE WHEN a.chain='ETH'  THEN a.native_balance END), 0)::text AS eth_native,
+                COALESCE(SUM(CASE WHEN a.chain='ETH'  THEN a.usdt_balance   END), 0)::text AS eth_usdt,
+                COALESCE(SUM(CASE WHEN a.chain='TRON' THEN a.native_balance END), 0)::text AS tron_native,
+                COALESCE(SUM(CASE WHEN a.chain='TRON' THEN a.usdt_balance   END), 0)::text AS tron_usdt,
+                COUNT(*)::int AS funded_address_count,
+                MAX(a.last_balance_change_at) AS last_balance_change_at
+         FROM wallets w
+         JOIN addresses a ON a.wallet_id = w.id
+         WHERE a.native_balance > 0 OR a.usdt_balance > 0
+         GROUP BY w.id
+         ORDER BY last_balance_change_at DESC NULLS LAST, w.id DESC
+         LIMIT $1`,
+        [limit]
+      );
+      return { wallets: res.rows };
+    }
+  );
 
   // GET /:id
   fastify.get<{ Params: { id: string } }>(
@@ -242,7 +278,7 @@ export default async function walletRoutes(fastify: FastifyInstance) {
         body: {
           type: 'object',
           required: ['chain'],
-          properties: { chain: { type: 'string', enum: ['BTC', 'ETH', 'TRON'] } },
+          properties: { chain: { type: 'string', enum: ['BTC', 'TRON'] } },
         },
       },
     },

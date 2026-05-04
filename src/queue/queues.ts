@@ -13,10 +13,16 @@ import { createQueueConnection, QUEUE_NAMES } from './connection.js';
 // ─── Typed job data ───
 export interface GenerationJobData {
   jobDbId: number;
+  /** start user_id برای این chunk (هر chunk یه slice مجزای user_id range می‌گیره). */
   startUserId: number;
+  /** تعداد ولت‌های همین chunk (نه total job). */
   count: number;
   wordCount: 12 | 24;
   addressesPerWallet: number;
+  /** شماره chunk تو parent job (0-based). برای jobهای legacy غیر-chunked: 0. */
+  chunkIndex?: number;
+  /** تعداد کل chunks تو parent job. برای legacy: 1. */
+  chunksTotal?: number;
 }
 
 export interface BalanceCheckJobData {
@@ -28,6 +34,12 @@ export interface BalanceCheckJobData {
 
 export interface CleanupJobData {
   trigger: 'scheduled' | 'manual';
+}
+
+export interface TemplateRunJobData {
+  templateId: number;
+  /** برای logging — 'cron' وقتی repeatable fire می‌کنه. */
+  trigger: 'cron';
 }
 
 // یه connection share بین queue‌ها (producer side)
@@ -59,6 +71,17 @@ export const cleanupQueue = new Queue<CleanupJobData>(QUEUE_NAMES.CLEANUP, {
     attempts: 1,
     removeOnComplete: { count: 30 },
     removeOnFail: { count: 30 },
+  },
+});
+
+export const templateRunsQueue = new Queue<TemplateRunJobData>(QUEUE_NAMES.TEMPLATE_RUNS, {
+  connection: producerConnection,
+  defaultJobOptions: {
+    // اگه fire شد و runTemplate fail کرد، retry آنی. بیشتر از یک بار retry نمی‌کنیم —
+    // اگه واقعاً fail شد، اپراتور باید audit log رو ببینه و دستی Run Now بزنه.
+    attempts: 1,
+    removeOnComplete: { count: 50 },
+    removeOnFail: { count: 100 },
   },
 });
 

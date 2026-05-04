@@ -63,7 +63,7 @@ RUN groupadd --system --gid 1001 nodeapp \
 
 COPY --chown=nodeapp:nodeapp --from=prod-deps /app/node_modules ./node_modules
 COPY --chown=nodeapp:nodeapp --from=build /app/dist ./dist
-COPY --chown=nodeapp:nodeapp public ./public
+COPY --chown=nodeapp:nodeapp public ./dist/public
 COPY --chown=nodeapp:nodeapp package.json ./
 
 USER nodeapp

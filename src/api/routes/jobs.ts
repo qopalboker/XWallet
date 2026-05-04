@@ -33,6 +33,8 @@ export async function jobRoutes(app: FastifyInstance) {
     params.push(limit, offset);
     const rows = await pool.query(
       `SELECT id, requested_by, word_count, total_count, completed, status,
+              chunks_total, chunks_done, failed_count,
+              addresses_per_wallet, start_user_id,
               started_at, completed_at, created_at,
               CASE WHEN LENGTH(error) > 200 THEN LEFT(error, 200) || '...' ELSE error END AS error
        FROM generation_jobs ${whereClause}
@@ -65,12 +67,17 @@ export async function jobRoutes(app: FastifyInstance) {
   );
 
   // ─── POST /api/jobs/generate ───
+  // درخواست رو به chunk‌های مساوی (با چند تا remainder) تقسیم می‌کنیم. هر
+  // chunk یه BullMQ job مستقل می‌گیره و تو یه تراکنش (UNNEST insert) می‌سازه.
+  // پیش‌فرض chunkSize = 250 ولت (sweet spot بین تعداد روند و هزینه memory هر job).
+  // Cap حداقلی روی chunkSize و حداکثری روی تعداد chunks ست شده تا منطق پایدار بمونه.
   app.post<{
     Body: {
       count: number;
       wordCount?: 12 | 24;
       addressesPerWallet?: number;
       startUserId?: number;
+      chunkSize?: number;
     };
   }>(
     '/api/jobs/generate',
@@ -85,6 +92,7 @@ export async function jobRoutes(app: FastifyInstance) {
             wordCount: { type: 'integer', enum: [12, 24] },
             addressesPerWallet: { type: 'integer', minimum: 1, maximum: 20 },
             startUserId: { type: 'integer', minimum: 1 },
+            chunkSize: { type: 'integer', minimum: 1, maximum: 5000 },
           },
         },
       },
@@ -95,6 +103,7 @@ export async function jobRoutes(app: FastifyInstance) {
         wordCount = 12,
         addressesPerWallet = 1,
         startUserId,
+        chunkSize: requestedChunkSize,
       } = request.body;
 
       let start = startUserId;
@@ -116,28 +125,53 @@ export async function jobRoutes(app: FastifyInstance) {
         });
       }
 
+      // chunk sizing
+      const chunkSize = Math.max(1, Math.min(requestedChunkSize ?? 250, count));
+      const chunksTotal = Math.ceil(count / chunkSize);
+
       const dbRes = await pool.query<{ id: number }>(
         `INSERT INTO generation_jobs
-         (requested_by, word_count, total_count, status)
-         VALUES ($1, $2, $3, 'pending')
+           (requested_by, word_count, total_count, status,
+            chunks_total, chunks_done, failed_count,
+            addresses_per_wallet, start_user_id)
+         VALUES ($1, $2, $3, 'pending', $4, 0, 0, $5, $6)
          RETURNING id`,
-        [request.admin!.sub, wordCount, count]
+        [request.admin!.sub, wordCount, count, chunksTotal, addressesPerWallet, start]
       );
       const jobDbId = dbRes.rows[0].id;
 
-      const bullJob = await generationQueue.add('generate', {
-        jobDbId,
-        startUserId: start,
-        count,
-        wordCount,
-        addressesPerWallet,
-      });
+      // enqueue همه chunk ها — jobOpts: jobId مشخص می‌کنیم تا duplicate retry نشه
+      const bullJobIds: (string | undefined)[] = [];
+      for (let i = 0; i < chunksTotal; i++) {
+        const chunkStart = start + i * chunkSize;
+        const chunkCount = Math.min(chunkSize, count - i * chunkSize);
+        const bj = await generationQueue.add(
+          'generate',
+          {
+            jobDbId,
+            startUserId: chunkStart,
+            count: chunkCount,
+            wordCount,
+            addressesPerWallet,
+            chunkIndex: i,
+            chunksTotal,
+          },
+          {
+            // jobId مشخص می‌کنه که اگه به هر دلیل دو بار enqueue شد، BullMQ
+            // یکی رو drop کنه. شکل: gen:<jobDbId>:<chunkIndex>
+            jobId: `gen:${jobDbId}:${i}`,
+          }
+        );
+        bullJobIds.push(bj.id);
+      }
 
       return reply.code(201).send({
         jobDbId,
-        bullJobId: bullJob.id,
+        bullJobIds,
         startUserId: start,
         count,
+        chunksTotal,
+        chunkSize,
       });
     }
   );

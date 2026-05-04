@@ -25,6 +25,8 @@ import { jobRoutes } from './routes/jobs.js';
 import { credentialRoutes } from './routes/credentials.js';
 import { benchmarkRoutes } from './routes/benchmark.js';
 import { statsRoutes } from './routes/stats.js';
+import { testRoutes } from './routes/test.js';
+import { batchTemplateRoutes } from './routes/batch-templates.js';
 import { registerAuthDecorators } from '../auth/index.js';
 import { cleanupOnStartup } from '../services/benchmark-service.js';
 import { verifyRegionOnBoot } from '../services/getblock.js';
@@ -118,6 +120,18 @@ export async function buildServer() {
     done(null, payload);
   });
 
+  // Allow empty JSON bodies (e.g. POST /auth/logout) — default parser 400s on them.
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
+    const s = (body as string).trim();
+    if (s.length === 0) return done(null, undefined);
+    try {
+      done(null, JSON.parse(s));
+    } catch (err) {
+      (err as { statusCode?: number }).statusCode = 400;
+      done(err as Error, undefined);
+    }
+  });
+
   // ─── Security headers ───
   await app.register(helmet, {
     contentSecurityPolicy: {
@@ -153,6 +167,8 @@ export async function buildServer() {
   await app.register(credentialRoutes);
   await app.register(benchmarkRoutes);
   await app.register(statsRoutes);
+  await app.register(testRoutes);
+  await app.register(batchTemplateRoutes);
 
   // Health check
   app.get('/health', async () => ({ ok: true, ts: new Date().toISOString() }));

@@ -37,6 +37,20 @@ const NORMAL_S = intervalSec('NORMAL_INTERVAL_SEC', 30 * 60);
 const COOL_S = intervalSec('COOL_INTERVAL_SEC', 2 * 60 * 60);
 const INACTIVE_S = intervalSec('INACTIVE_INTERVAL_SEC', 12 * 60 * 60);
 
+// اندازه پیش‌فرض هر job (هر tick): اگه job.data.batchSize ست نشه ازین استفاده می‌شه.
+// در آینده این مقدار از runtime config table قابل override می‌شه (Phase 2).
+const DEFAULT_BATCH_SIZE = (() => {
+  const v = Number(process.env.BALANCE_BATCH_SIZE);
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : 200;
+})();
+
+// تعداد job های هم‌زمان روی این worker. قبلاً hardcoded = 3 بود.
+// پیش‌فرض الان 5 (با RPC quotaهای امروز سالم‌ست). برای fleet بزرگ‌تر بالا ببر.
+const WORKER_CONCURRENCY = (() => {
+  const v = Number(process.env.BALANCE_CONCURRENCY);
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : 5;
+})();
+
 function pickInterval(
   hasBalance: boolean,
   changedNow: boolean,
@@ -62,7 +76,7 @@ export function startBalanceWorker(): Worker {
   const worker = new Worker<BalanceCheckJobData>(
     QUEUE_NAMES.BALANCE_CHECK,
     async (job) => {
-      const batchSize = job.data.batchSize ?? 200;
+      const batchSize = job.data.batchSize ?? DEFAULT_BATCH_SIZE;
 
       // آدرس‌های due
       const res = await pool.query<AddressRow>(
@@ -170,8 +184,12 @@ export function startBalanceWorker(): Worker {
     },
     {
       connection: createQueueConnection(),
-      concurrency: Number(process.env.BALANCE_CONCURRENCY ?? 3),
+      concurrency: WORKER_CONCURRENCY,
     }
+  );
+
+  console.log(
+    `[bal] worker concurrency=${WORKER_CONCURRENCY} default_batch_size=${DEFAULT_BATCH_SIZE}`
   );
 
   worker.on('completed', (job) => {

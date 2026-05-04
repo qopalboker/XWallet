@@ -23,4 +23,6 @@ export const QUEUE_NAMES = {
   GENERATION: 'wallet-generation',
   BALANCE_CHECK: 'balance-check',
   CLEANUP: 'cleanup',
+  /** صف برای trigger های cron-driven روی batch_templates */
+  TEMPLATE_RUNS: 'template-runs',
 } as const;
