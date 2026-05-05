@@ -335,8 +335,8 @@
     /* Fade-in for pages */
     html[data-theme="dark-2026"] main > * { animation: fadeUp 0.35s var(--ease) both; }
     @keyframes fadeUp {
-      from { opacity: 0; transform: translateY(6px); }
-      to   { opacity: 1; transform: translateY(0); }
+      from { opacity: 0; }
+      to   { opacity: 1; }
     }
 
     /* Focus ring for links */
@@ -717,17 +717,19 @@ createApp({
           </tbody>
         </table>
       </div>
-      <div v-if="showReveal" class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-        <div class="bg-white rounded-xl shadow-xl max-w-lg w-full p-6">
-          <h3 class="text-lg font-bold mb-4">🔓 نمایش Mnemonic</h3>
-          <div v-if="revealBusy" class="text-slate-600 text-sm">در حال بارگذاری...</div>
-          <div v-else-if="revealError">
-            <div class="text-red-600 text-sm mb-3">{{ revealError }}</div>
-            <button @click="closeReveal" class="w-full py-2 bg-slate-800 text-white rounded">بستن</button>
-          </div>
-          <div v-else-if="revealedMnemonic">
-            <div class="bg-slate-100 p-4 rounded mono text-sm break-all">{{ revealedMnemonic }}</div>
-            <button @click="closeReveal" class="mt-4 w-full py-2 bg-slate-800 text-white rounded">بستن</button>
+      <div v-if="showReveal" class="fixed inset-0 bg-black/50 z-50 overflow-y-auto">
+        <div class="flex min-h-full items-start justify-center px-4 py-8">
+          <div class="bg-white rounded-xl shadow-xl max-w-lg w-full p-6">
+            <h3 class="text-lg font-bold mb-4">🔓 نمایش Mnemonic</h3>
+            <div v-if="revealBusy" class="text-slate-600 text-sm">در حال بارگذاری...</div>
+            <div v-else-if="revealError">
+              <div class="text-red-600 text-sm mb-3">{{ revealError }}</div>
+              <button @click="closeReveal" class="w-full py-2 bg-slate-800 text-white rounded">بستن</button>
+            </div>
+            <div v-else-if="revealedMnemonic">
+              <div class="bg-slate-100 p-4 rounded mono text-sm break-all">{{ revealedMnemonic }}</div>
+              <button @click="closeReveal" class="mt-4 w-full py-2 bg-slate-800 text-white rounded">بستن</button>
+            </div>
           </div>
         </div>
       </div>
@@ -779,19 +781,21 @@ createApp({
           </tbody>
         </table>
       </div>
-      <div v-if="showNew" class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-        <div class="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
-          <h3 class="text-lg font-bold mb-4">Job جدید</h3>
-          <form @submit.prevent="submit" class="space-y-3">
-            <div><label class="block text-sm mb-1">تعداد</label><input v-model="form.count" type="number" min="1" max="100000" required class="w-full px-3 py-2 border rounded" /></div>
-            <div class="grid grid-cols-2 gap-3">
-              <div><label class="block text-sm mb-1">کلمات</label><select v-model="form.wordCount" class="w-full px-3 py-2 border rounded bg-white"><option :value="12">۱۲</option><option :value="24">۲۴</option></select></div>
-              <div><label class="block text-sm mb-1">آدرس</label><input v-model="form.addressesPerWallet" type="number" min="1" max="20" class="w-full px-3 py-2 border rounded" /></div>
-            </div>
-            <div><label class="block text-sm mb-1">User ID شروع</label><input v-model="form.startUserId" type="number" placeholder="اختیاری" class="w-full px-3 py-2 border rounded" /></div>
-            <div v-if="newError" class="text-red-600 text-sm">{{ newError }}</div>
-            <div class="flex gap-2 justify-end"><button type="button" @click="showNew = false" class="px-4 py-2 border rounded">انصراف</button><button type="submit" :disabled="newBusy" class="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50">{{ newBusy ? '...' : 'شروع' }}</button></div>
-          </form>
+      <div v-if="showNew" class="fixed inset-0 bg-black/50 z-50 overflow-y-auto">
+        <div class="flex min-h-full items-start justify-center px-4 py-8">
+          <div class="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
+            <h3 class="text-lg font-bold mb-4">Job جدید</h3>
+            <form @submit.prevent="submit" class="space-y-3">
+              <div><label class="block text-sm mb-1">تعداد</label><input v-model="form.count" type="number" min="1" max="100000" required class="w-full px-3 py-2 border rounded" /></div>
+              <div class="grid grid-cols-2 gap-3">
+                <div><label class="block text-sm mb-1">کلمات</label><select v-model="form.wordCount" class="w-full px-3 py-2 border rounded bg-white"><option :value="12">۱۲</option><option :value="24">۲۴</option></select></div>
+                <div><label class="block text-sm mb-1">آدرس</label><input v-model="form.addressesPerWallet" type="number" min="1" max="20" class="w-full px-3 py-2 border rounded" /></div>
+              </div>
+              <div><label class="block text-sm mb-1">User ID شروع</label><input v-model="form.startUserId" type="number" placeholder="اختیاری" class="w-full px-3 py-2 border rounded" /></div>
+              <div v-if="newError" class="text-red-600 text-sm">{{ newError }}</div>
+              <div class="flex gap-2 justify-end"><button type="button" @click="showNew = false" class="px-4 py-2 border rounded">انصراف</button><button type="submit" :disabled="newBusy" class="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50">{{ newBusy ? '...' : 'شروع' }}</button></div>
+            </form>
+          </div>
         </div>
       </div>
     </div>
@@ -805,10 +809,7 @@ createApp({
     const editing = ref(null);
     const form = reactive({
       name: '',
-      enabled: true,
-      triggerType: 'manual',
-      cronExpr: '',
-      cooldownHours: 24,
+      cooldownSeconds: 0,
       spec: { wordCount: 12, addressesPerWallet: 1, count: 100, startUserId: '', chunkSize: 250 },
     });
     const formError = ref('');
@@ -824,10 +825,7 @@ createApp({
 
     const resetForm = () => {
       form.name = '';
-      form.enabled = true;
-      form.triggerType = 'manual';
-      form.cronExpr = '';
-      form.cooldownHours = 24;
+      form.cooldownSeconds = 0;
       form.spec.wordCount = 12;
       form.spec.addressesPerWallet = 1;
       form.spec.count = 100;
@@ -841,10 +839,7 @@ createApp({
     const startEdit = (t) => {
       editing.value = t;
       form.name = t.name;
-      form.enabled = t.enabled;
-      form.triggerType = t.triggerType;
-      form.cronExpr = t.cronExpr || '';
-      form.cooldownHours = t.cooldownHours == null ? '' : t.cooldownHours;
+      form.cooldownSeconds = t.cooldownSeconds ?? 0;
       form.spec.wordCount = t.spec.wordCount;
       form.spec.addressesPerWallet = t.spec.addressesPerWallet;
       form.spec.count = t.spec.count;
@@ -866,12 +861,9 @@ createApp({
         if (form.spec.chunkSize !== '' && form.spec.chunkSize != null) spec.chunkSize = Number(form.spec.chunkSize);
         const body = {
           name: form.name.trim(),
-          enabled: !!form.enabled,
           spec,
-          triggerType: form.triggerType,
-          cooldownHours: form.cooldownHours === '' || form.cooldownHours == null ? null : Number(form.cooldownHours),
+          cooldownSeconds: Number(form.cooldownSeconds || 0),
         };
-        if (form.triggerType === 'cron') body.cronExpr = form.cronExpr.trim();
         if (editing.value) {
           await api('/api/batch-templates/' + editing.value.id, { method: 'PATCH', body });
         } else {
@@ -882,24 +874,29 @@ createApp({
       } catch (e) { formError.value = e.message || 'خطا'; } finally { formBusy.value = false; }
     };
 
-    const toggleEnabled = async (t) => {
-      try { await api('/api/batch-templates/' + t.id, { method: 'PATCH', body: { enabled: !t.enabled } }); await load(); }
-      catch (e) { alert(e.message || 'خطا'); }
+    const startChain = async (t) => {
+      if (!confirm('chain برای "' + t.name + '" رو فعال کنم و اولین batch رو fire کنم؟')) return;
+      try {
+        const r = await api('/api/batch-templates/' + t.id + '/start', { method: 'POST' });
+        const run = r.run || r;
+        if (run.reused) alert('یه job قبلاً در حال اجراست: #' + run.jobDbId);
+        else alert('chain فعال شد. اولین job: #' + run.jobDbId + ' (' + run.chunksTotal + ' chunk × ' + run.chunkSize + ')');
+        await load();
+      } catch (e) { alert(e.message || 'خطا'); }
+    };
+
+    const pauseChain = async (t) => {
+      if (!confirm('chain برای "' + t.name + '" رو pause کنم؟ batch فعلی عادی تموم می‌شه.')) return;
+      try {
+        await api('/api/batch-templates/' + t.id + '/pause', { method: 'POST' });
+        await load();
+      } catch (e) { alert(e.message || 'خطا'); }
     };
 
     const remove = async (t) => {
       if (!confirm('حذف template "' + t.name + '"؟')) return;
       try { await api('/api/batch-templates/' + t.id, { method: 'DELETE' }); await load(); }
       catch (e) { alert(e.message || 'خطا'); }
-    };
-
-    const runNow = async (t) => {
-      try {
-        const r = await api('/api/batch-templates/' + t.id + '/run', { method: 'POST' });
-        if (r.reused) alert('یه job قبلاً در حال اجراست: #' + r.jobDbId);
-        else alert('Job شروع شد: #' + r.jobDbId + ' (' + r.chunksTotal + ' chunk × ' + r.chunkSize + ')');
-        await load();
-      } catch (e) { alert(e.message || 'خطا'); }
     };
 
     const toggleCircuitBreaker = async () => {
@@ -923,7 +920,7 @@ createApp({
 
     return {
       items, cb, showForm, editing, form, formError, formBusy,
-      startNew, startEdit, submit, toggleEnabled, remove, runNow, toggleCircuitBreaker, fmtTime,
+      startNew, startEdit, submit, remove, startChain, pauseChain, toggleCircuitBreaker, fmtTime,
     };
   },
   template: `
@@ -942,7 +939,7 @@ createApp({
       </div>
 
       <div v-if="!cb.enabled" class="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-800">
-        ⚠ AUTO_BATCH غیرفعاله — هیچ template ای fire نمی‌شه (نه startup، نه cron، نه Run Now).
+        ⚠ AUTO_BATCH غیرفعاله — هیچ chain ای fire نمی‌شه.
       </div>
 
       <div class="bg-white rounded-xl shadow overflow-hidden">
@@ -950,23 +947,25 @@ createApp({
           <thead class="bg-slate-50 border-b">
             <tr>
               <th class="p-3 text-right">نام</th>
-              <th class="p-3 text-right">trigger</th>
-              <th class="p-3 text-right">برنامه</th>
+              <th class="p-3 text-right">chain</th>
+              <th class="p-3 text-right">cooldown</th>
               <th class="p-3 text-right">spec</th>
               <th class="p-3 text-right">آخرین اجرا</th>
               <th class="p-3 text-right">آخرین job</th>
-              <th class="p-3 text-right">فعال</th>
               <th class="p-3 text-right">عملیات</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="t in items" :key="t.id" class="border-b hover:bg-slate-50">
               <td class="p-3"><div class="font-bold">{{ t.name }}</div><div class="text-xs text-slate-500 mono">#{{ t.id }}</div></td>
-              <td class="p-3"><span class="px-2 py-0.5 rounded text-xs bg-slate-100">{{ t.triggerType }}</span></td>
+              <td class="p-3">
+                <span :class="t.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'" class="px-2 py-0.5 rounded text-xs font-bold">
+                  {{ t.status }}
+                </span>
+              </td>
               <td class="p-3 mono text-xs">
-                <span v-if="t.triggerType === 'cron'">{{ t.cronExpr }}</span>
-                <span v-else-if="t.triggerType === 'on_startup'">cooldown: {{ t.cooldownHours == null ? '24h (default)' : t.cooldownHours + 'h' }}</span>
-                <span v-else class="text-slate-400">—</span>
+                <span v-if="t.cooldownSeconds > 0">{{ t.cooldownSeconds }}s</span>
+                <span v-else class="text-slate-400">immediate</span>
               </td>
               <td class="p-3 text-xs">
                 count={{ t.spec.count }} · words={{ t.spec.wordCount }} · addr={{ t.spec.addressesPerWallet }}
@@ -978,100 +977,77 @@ createApp({
                 <span v-else class="text-slate-400">—</span>
               </td>
               <td class="p-3">
-                <button @click="toggleEnabled(t)" :class="t.enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'" class="px-2 py-0.5 rounded text-xs">
-                  {{ t.enabled ? 'on' : 'off' }}
-                </button>
-              </td>
-              <td class="p-3">
                 <div class="flex gap-1">
-                  <button @click="runNow(t)" class="px-2 py-1 bg-blue-600 text-white rounded text-xs" :disabled="!cb.enabled || !t.enabled">▶ Run</button>
+                  <button v-if="t.status === 'paused'" @click="startChain(t)" class="px-2 py-1 bg-emerald-600 text-white rounded text-xs" :disabled="!cb.enabled">▶ start</button>
+                  <button v-else @click="pauseChain(t)" class="px-2 py-1 bg-amber-600 text-white rounded text-xs">⏸ pause</button>
                   <button @click="startEdit(t)" class="px-2 py-1 border rounded text-xs">ویرایش</button>
                   <button @click="remove(t)" class="px-2 py-1 border border-red-300 text-red-600 rounded text-xs">حذف</button>
                 </div>
               </td>
             </tr>
             <tr v-if="items.length === 0">
-              <td colspan="8" class="p-6 text-center text-slate-400">هنوز template ای نساختی</td>
+              <td colspan="7" class="p-6 text-center text-slate-400">هنوز template ای نساختی</td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <div v-if="showForm" class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-        <div class="bg-white rounded-xl shadow-xl max-w-lg w-full p-6 max-h-[90vh] overflow-auto">
-          <h3 class="text-lg font-bold mb-4">{{ editing ? 'ویرایش template' : 'Template جدید' }}</h3>
-          <form @submit.prevent="submit" class="space-y-3">
-            <div>
-              <label class="block text-sm mb-1">نام</label>
-              <input v-model="form.name" required maxlength="100" class="w-full px-3 py-2 border rounded" placeholder="مثلاً: روزانه ۱۰۰۰ ولت" />
-            </div>
-            <div class="grid grid-cols-2 gap-3">
+      <div v-if="showForm" class="fixed inset-0 bg-black/50 z-50 overflow-y-auto">
+        <div class="flex min-h-full items-start justify-center px-4 py-8">
+          <div class="bg-white rounded-xl shadow-xl max-w-lg w-full p-6">
+            <h3 class="text-lg font-bold mb-4">{{ editing ? 'ویرایش template' : 'Template جدید' }}</h3>
+            <form @submit.prevent="submit" class="space-y-3">
               <div>
-                <label class="block text-sm mb-1">trigger</label>
-                <select v-model="form.triggerType" class="w-full px-3 py-2 border rounded bg-white">
-                  <option value="manual">manual</option>
-                  <option value="on_startup">on_startup</option>
-                  <option value="cron">cron</option>
-                </select>
+                <label class="block text-sm mb-1">نام</label>
+                <input v-model="form.name" required maxlength="100" class="w-full px-3 py-2 border rounded" placeholder="مثلاً: روزانه ۱۰۰۰ ولت" />
               </div>
-              <div class="flex items-end">
-                <label class="flex items-center gap-2 text-sm">
-                  <input v-model="form.enabled" type="checkbox" />
-                  فعال
-                </label>
+              <div>
+                <label class="block text-sm mb-1">cooldown بین batchها (ثانیه)</label>
+                <input v-model="form.cooldownSeconds" type="number" min="0" placeholder="0" class="w-full px-3 py-2 border rounded" />
+                <div class="text-xs text-slate-500 mt-1">۰ = batch بعدی بلافاصله بعد از تموم شدن قبلی fire می‌شه. مقدار بزرگ‌تر برای rate-limiting روی resource downstream.</div>
               </div>
-            </div>
-            <div v-if="form.triggerType === 'cron'">
-              <label class="block text-sm mb-1">cron expression (۵ یا ۶ فیلد)</label>
-              <input v-model="form.cronExpr" required class="w-full px-3 py-2 border rounded mono" placeholder="0 2 * * 0  (یکشنبه ۲ بامداد)" />
-              <div class="text-xs text-slate-500 mt-1">نمونه: <span class="mono">0 2 * * *</span> هر روز ۲ بامداد، <span class="mono">*/30 * * * *</span> هر ۳۰ دقیقه</div>
-            </div>
-            <div v-if="form.triggerType === 'on_startup'">
-              <label class="block text-sm mb-1">cooldown (ساعت)</label>
-              <input v-model="form.cooldownHours" type="number" min="0" placeholder="پیش‌فرض ۲۴" class="w-full px-3 py-2 border rounded" />
-              <div class="text-xs text-slate-500 mt-1">برای جلوگیری از اجرای مجدد روی worker restart. ۰ = همیشه fire.</div>
-            </div>
 
-            <div class="border-t pt-3 mt-2">
-              <div class="text-sm font-bold mb-2">spec</div>
-              <div class="grid grid-cols-3 gap-3">
-                <div>
-                  <label class="block text-sm mb-1">تعداد</label>
-                  <input v-model="form.spec.count" type="number" min="1" max="10000" required class="w-full px-3 py-2 border rounded" />
+              <div class="border-t pt-3 mt-2">
+                <div class="text-sm font-bold mb-2">spec</div>
+                <div class="grid grid-cols-3 gap-3">
+                  <div>
+                    <label class="block text-sm mb-1">تعداد</label>
+                    <input v-model="form.spec.count" type="number" min="1" max="10000" required class="w-full px-3 py-2 border rounded" />
+                  </div>
+                  <div>
+                    <label class="block text-sm mb-1">کلمات</label>
+                    <select v-model="form.spec.wordCount" class="w-full px-3 py-2 border rounded bg-white">
+                      <option :value="12">۱۲</option>
+                      <option :value="24">۲۴</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="block text-sm mb-1">آدرس/ولت</label>
+                    <input v-model="form.spec.addressesPerWallet" type="number" min="1" max="20" class="w-full px-3 py-2 border rounded" />
+                  </div>
                 </div>
-                <div>
-                  <label class="block text-sm mb-1">کلمات</label>
-                  <select v-model="form.spec.wordCount" class="w-full px-3 py-2 border rounded bg-white">
-                    <option :value="12">۱۲</option>
-                    <option :value="24">۲۴</option>
-                  </select>
+                <div class="grid grid-cols-2 gap-3 mt-3">
+                  <div>
+                    <label class="block text-sm mb-1">User ID شروع</label>
+                    <input v-model="form.spec.startUserId" type="number" placeholder="اختیاری (auto)" class="w-full px-3 py-2 border rounded" />
+                  </div>
+                  <div>
+                    <label class="block text-sm mb-1">chunk size</label>
+                    <input v-model="form.spec.chunkSize" type="number" min="1" max="5000" class="w-full px-3 py-2 border rounded" />
+                  </div>
                 </div>
-                <div>
-                  <label class="block text-sm mb-1">آدرس/ولت</label>
-                  <input v-model="form.spec.addressesPerWallet" type="number" min="1" max="20" class="w-full px-3 py-2 border rounded" />
-                </div>
+                <div class="text-xs text-slate-500 mt-2">سقف سمت سرور: ۱۰٬۰۰۰ ولت. در صورت bypass UI همچنان enforced.</div>
               </div>
-              <div class="grid grid-cols-2 gap-3 mt-3">
-                <div>
-                  <label class="block text-sm mb-1">User ID شروع</label>
-                  <input v-model="form.spec.startUserId" type="number" placeholder="اختیاری (auto)" class="w-full px-3 py-2 border rounded" />
-                </div>
-                <div>
-                  <label class="block text-sm mb-1">chunk size</label>
-                  <input v-model="form.spec.chunkSize" type="number" min="1" max="5000" class="w-full px-3 py-2 border rounded" />
-                </div>
-              </div>
-              <div class="text-xs text-slate-500 mt-2">سقف سمت سرور: ۱۰٬۰۰۰ ولت. در صورت bypass UI همچنان enforced.</div>
-            </div>
 
-            <div v-if="formError" class="text-red-600 text-sm">{{ formError }}</div>
-            <div class="flex gap-2 justify-end pt-2">
-              <button type="button" @click="showForm = false" class="px-4 py-2 border rounded">انصراف</button>
-              <button type="submit" :disabled="formBusy" class="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50">
-                {{ formBusy ? '...' : (editing ? 'ذخیره' : 'ساخت') }}
-              </button>
-            </div>
-          </form>
+              <div v-if="formError" class="text-red-600 text-sm">{{ formError }}</div>
+              <div class="flex gap-2 justify-end pt-2">
+                <button type="button" @click="showForm = false" class="px-4 py-2 border rounded">انصراف</button>
+                <button type="submit" :disabled="formBusy" class="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50">
+                  {{ formBusy ? '...' : (editing ? 'ذخیره' : 'ساخت') }}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       </div>
     </div>
@@ -1349,40 +1325,44 @@ createApp({
           </table>
         </div>
       </div>
-      <div v-if="showNew" class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-        <div class="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
-          <h3 class="text-lg font-bold mb-4">افزودن</h3>
-          <form @submit.prevent="submit" class="space-y-3">
-            <div><label class="block text-sm mb-1">نوع</label><select v-model="form.provider" class="w-full px-3 py-2 border rounded bg-white"><option value="trongrid">TronGrid</option><option value="eth_rpc">ETH RPC</option><option value="btc_api">BTC API</option></select></div>
-            <div><label class="block text-sm mb-1">مقدار</label><input v-model="form.value" type="text" required class="w-full px-3 py-2 border rounded mono text-xs" /></div>
-            <div><label class="block text-sm mb-1">برچسب</label><input v-model="form.label" type="text" class="w-full px-3 py-2 border rounded" /></div>
-            <div v-if="newError" class="text-red-600 text-sm">{{ newError }}</div>
-            <div class="flex gap-2 justify-end"><button type="button" @click="showNew = false" class="px-4 py-2 border rounded">انصراف</button><button type="submit" :disabled="newBusy || !form.value.trim()" class="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50">{{ newBusy ? '...' : 'افزودن' }}</button></div>
-          </form>
+      <div v-if="showNew" class="fixed inset-0 bg-black/50 z-50 overflow-y-auto">
+        <div class="flex min-h-full items-start justify-center px-4 py-8">
+          <div class="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
+            <h3 class="text-lg font-bold mb-4">افزودن</h3>
+            <form @submit.prevent="submit" class="space-y-3">
+              <div><label class="block text-sm mb-1">نوع</label><select v-model="form.provider" class="w-full px-3 py-2 border rounded bg-white"><option value="trongrid">TronGrid</option><option value="eth_rpc">ETH RPC</option><option value="btc_api">BTC API</option></select></div>
+              <div><label class="block text-sm mb-1">مقدار</label><input v-model="form.value" type="text" required class="w-full px-3 py-2 border rounded mono text-xs" /></div>
+              <div><label class="block text-sm mb-1">برچسب</label><input v-model="form.label" type="text" class="w-full px-3 py-2 border rounded" /></div>
+              <div v-if="newError" class="text-red-600 text-sm">{{ newError }}</div>
+              <div class="flex gap-2 justify-end"><button type="button" @click="showNew = false" class="px-4 py-2 border rounded">انصراف</button><button type="submit" :disabled="newBusy || !form.value.trim()" class="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50">{{ newBusy ? '...' : 'افزودن' }}</button></div>
+            </form>
+          </div>
         </div>
       </div>
-      <div v-if="showGbImport" class="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-        <div class="bg-white rounded-xl shadow-xl max-w-xl w-full p-6">
-          <h3 class="text-lg font-bold mb-2">📥 ایمپورت یکجا از GetBlock</h3>
-          <p class="text-sm text-slate-500 mb-3">فایل JSON دانلود‌شده از داشبورد GetBlock رو اینجا پیست کن. توکن‌ها خودکار با آدرس کامل endpoint ذخیره می‌شن و روی <code>benchmark_allowed=false</code> تنظیم می‌شن تا سهمیهٔ free-tier حفظ بشه.</p>
-          <form @submit.prevent="gbImport" class="space-y-3">
-            <textarea v-model="gbForm.config" rows="8" required dir="ltr" class="w-full px-3 py-2 border rounded mono text-xs font-mono" placeholder='{"shared":{"eth":{"mainnet":{"jsonRpc":["<token>"]}}}}'></textarea>
-            <label class="flex items-center gap-2 text-sm"><input type="checkbox" v-model="gbForm.skipExisting"> رد کردن توکن‌های تکراری (بر اساس label)</label>
-            <div v-if="gbError" class="text-red-600 text-sm">❌ {{ gbError }}</div>
-            <div v-if="gbResult" class="text-sm bg-slate-50 rounded p-3 border">
-              <div>✅ added: <b>{{ gbResult.added }}</b></div>
-              <div>↷ skipped: <b>{{ gbResult.skipped }}</b> <span v-if="gbResult.skippedBtc > 0">(شامل {{ gbResult.skippedBtc }} BTC skip — مصرف‌کننده نداریم)</span></div>
-              <div v-if="gbResult.invalid.length > 0">⚠ invalid: <b>{{ gbResult.invalid.length }}</b>
-                <ul class="mt-1 text-xs text-amber-700">
-                  <li v-for="m in gbResult.invalid" :key="m">• {{ m }}</li>
-                </ul>
+      <div v-if="showGbImport" class="fixed inset-0 bg-black/50 z-50 overflow-y-auto">
+        <div class="flex min-h-full items-start justify-center px-4 py-8">
+          <div class="bg-white rounded-xl shadow-xl max-w-xl w-full p-6">
+            <h3 class="text-lg font-bold mb-2">📥 ایمپورت یکجا از GetBlock</h3>
+            <p class="text-sm text-slate-500 mb-3">فایل JSON دانلود‌شده از داشبورد GetBlock رو اینجا پیست کن. توکن‌ها خودکار با آدرس کامل endpoint ذخیره می‌شن و روی <code>benchmark_allowed=false</code> تنظیم می‌شن تا سهمیهٔ free-tier حفظ بشه.</p>
+            <form @submit.prevent="gbImport" class="space-y-3">
+              <textarea v-model="gbForm.config" rows="8" required dir="ltr" class="w-full px-3 py-2 border rounded mono text-xs font-mono" placeholder='{"shared":{"eth":{"mainnet":{"jsonRpc":["<token>"]}}}}'></textarea>
+              <label class="flex items-center gap-2 text-sm"><input type="checkbox" v-model="gbForm.skipExisting"> رد کردن توکن‌های تکراری (بر اساس label)</label>
+              <div v-if="gbError" class="text-red-600 text-sm">❌ {{ gbError }}</div>
+              <div v-if="gbResult" class="text-sm bg-slate-50 rounded p-3 border">
+                <div>✅ added: <b>{{ gbResult.added }}</b></div>
+                <div>↷ skipped: <b>{{ gbResult.skipped }}</b> <span v-if="gbResult.skippedBtc > 0">(شامل {{ gbResult.skippedBtc }} BTC skip — مصرف‌کننده نداریم)</span></div>
+                <div v-if="gbResult.invalid.length > 0">⚠ invalid: <b>{{ gbResult.invalid.length }}</b>
+                  <ul class="mt-1 text-xs text-amber-700">
+                    <li v-for="m in gbResult.invalid" :key="m">• {{ m }}</li>
+                  </ul>
+                </div>
               </div>
-            </div>
-            <div class="flex gap-2 justify-end">
-              <button type="button" @click="showGbImport = false" class="px-4 py-2 border rounded">بستن</button>
-              <button type="submit" :disabled="gbBusy || !gbForm.config.trim()" class="px-4 py-2 bg-indigo-600 text-white rounded disabled:opacity-50">{{ gbBusy ? '...' : 'ایمپورت' }}</button>
-            </div>
-          </form>
+              <div class="flex gap-2 justify-end">
+                <button type="button" @click="showGbImport = false" class="px-4 py-2 border rounded">بستن</button>
+                <button type="submit" :disabled="gbBusy || !gbForm.config.trim()" class="px-4 py-2 bg-indigo-600 text-white rounded disabled:opacity-50">{{ gbBusy ? '...' : 'ایمپورت' }}</button>
+              </div>
+            </form>
+          </div>
         </div>
       </div>
     </div>

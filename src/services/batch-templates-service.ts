@@ -4,60 +4,32 @@
  *   - validateSpec: enforce سقف ۱۰هزار و سایر بازه‌ها سمت سرور (UI bypass)
  *   - runTemplate: یه template رو اجرا کنه — generation_jobs row می‌سازه و
  *     chunk به chunk به wallet-generation queue می‌فرسته. idempotent: اگه
- *     قبلاً یه job در حال اجرا یا pending برای این template ساخته شده،
- *     همون رو برمی‌گردونه.
+ *     آخرین job این template هنوز pending/running ست، همون رو برمی‌گردونه.
+ *   - setTemplateStatus: تغییر بین 'active' (chain ادامه پیدا کنه) و
+ *     'paused' (هیچ spawn جدیدی نشه؛ batch فعلی عادی تموم می‌شه).
  *   - isAutoBatchEnabled: env wins، بعد system_settings DB، پیش‌فرض true.
  *
- * Audit: همه‌ی mutation‌ها (create/update/delete/run) تو admin_audit_log ثبت
- * می‌شن. trigger خودکار 'cron' یا 'on_startup' هم با adminId=null لاگ می‌شه.
+ * Trigger model:
+ *   تو نسخهٔ قبل سه trigger داشتیم (manual / on_startup / cron). الان فقط
+ *   chain-on-completion: وقتی یه batch تموم می‌شه، generation worker خودش
+ *   نسخه بعدی رو spawn می‌کنه (تو src/queue/workers/generation.ts). bootstrap
+ *   اولین batch به صورت دستی از طریق POST /api/batch-templates/:id/start
+ *   انجام می‌شه.
+ *
+ * Audit: همه‌ی mutation‌ها (create/update/delete/run/status-change) تو
+ * admin_audit_log ثبت می‌شن. trigger خودکار 'chain' با adminId=null لاگ می‌شه.
  */
 
 import { pool } from '../db/pool.js';
-import { generationQueue, templateRunsQueue } from '../queue/queues.js';
-
-/**
- * شناسهٔ repeatable job که برای trigger='cron' روی templateRunsQueue ست می‌شه.
- * شکل ثابت: 'tpl-cron:{templateId}' — باعث می‌شه delete/update بتونه دقیقاً
- * همون scheduler رو پیدا و پاک کنه (orphaned cron نمی‌مونه).
- */
-function cronSchedulerId(templateId: number): string {
-  return `tpl-cron:${templateId}`;
-}
-
-async function removeCronScheduler(templateId: number): Promise<void> {
-  const id = cronSchedulerId(templateId);
-  // BullMQ v5: removeJobScheduler به‌صورت idempotent اگه نباشه فقط false برمی‌گردونه.
-  try {
-    await templateRunsQueue.removeJobScheduler(id);
-  } catch (e) {
-    // best-effort — اگه فِیل کرد فقط log کن. cron-run worker خودش 'not_found'
-    // رو دفع می‌کنه پس فاجعه نیست.
-    console.warn(`[batch-templates] removeJobScheduler(${id}) failed:`, (e as Error).message);
-  }
-}
-
-async function addCronScheduler(templateId: number, cronExpr: string): Promise<void> {
-  // upsertJobScheduler از API جدید BullMQ v5 ست — اگه قبلاً exist داشت
-  // override می‌کنه. این متد به removeJobScheduler هم متصله (هردو روی همون
-  // registry "jobScheduler" کار می‌کنن، نه repeatable قدیمی).
-  await templateRunsQueue.upsertJobScheduler(
-    cronSchedulerId(templateId),
-    { pattern: cronExpr },
-    {
-      name: 'tpl-cron',
-      data: { templateId, trigger: 'cron' as const },
-    }
-  );
-}
+import { generationQueue } from '../queue/queues.js';
 
 // ─── سقف‌ها (server-side، حتی اگه UI bypass بشه) ───
 export const MAX_WALLETS_PER_TEMPLATE = 10_000;
 export const MIN_CHUNK_SIZE = 1;
 export const MAX_CHUNK_SIZE = 5_000;
 export const DEFAULT_CHUNK_SIZE = 250;
-export const DEFAULT_COOLDOWN_HOURS = 24;
 
-export type TriggerType = 'on_startup' | 'cron' | 'manual';
+export type Status = 'active' | 'paused';
 
 export interface TemplateSpec {
   wordCount: 12 | 24;
@@ -70,11 +42,9 @@ export interface TemplateSpec {
 export interface BatchTemplate {
   id: number;
   name: string;
-  enabled: boolean;
+  status: Status;
+  cooldownSeconds: number;
   spec: TemplateSpec;
-  triggerType: TriggerType;
-  cronExpr: string | null;
-  cooldownHours: number | null;
   lastRunAt: Date | null;
   lastJobId: number | null;
   createdBy: number | null;
@@ -85,11 +55,9 @@ export interface BatchTemplate {
 interface TemplateRow {
   id: string;
   name: string;
-  enabled: boolean;
+  status: Status;
+  cooldown_seconds: number;
   spec_json: TemplateSpec;
-  trigger_type: TriggerType;
-  cron_expr: string | null;
-  cooldown_hours: number | null;
   last_run_at: Date | null;
   last_job_id: string | null;
   created_by: string | null;
@@ -101,11 +69,9 @@ function rowToTemplate(r: TemplateRow): BatchTemplate {
   return {
     id: Number(r.id),
     name: r.name,
-    enabled: r.enabled,
+    status: r.status,
+    cooldownSeconds: r.cooldown_seconds,
     spec: r.spec_json,
-    triggerType: r.trigger_type,
-    cronExpr: r.cron_expr,
-    cooldownHours: r.cooldown_hours,
     lastRunAt: r.last_run_at,
     lastJobId: r.last_job_id == null ? null : Number(r.last_job_id),
     createdBy: r.created_by == null ? null : Number(r.created_by),
@@ -127,8 +93,7 @@ export class TemplateValidationError extends Error {
 
 /**
  * spec رو اعتبارسنجی می‌کنه. این تابع نباید UI رو منعکس کنه — حتی اگه ولید هم
- * باشه، startup-fire و cron-fire همه از همین رد می‌شن، پس سقف ۱۰هزار حتماً
- * این‌جا اعمال می‌شه.
+ * باشه، chain-spawn هم از همین رد می‌شه، پس سقف ۱۰هزار حتماً این‌جا اعمال می‌شه.
  */
 export function validateSpec(raw: unknown): TemplateSpec {
   if (!raw || typeof raw !== 'object') {
@@ -176,32 +141,22 @@ export function validateSpec(raw: unknown): TemplateSpec {
   return out;
 }
 
-function validateTrigger(triggerType: unknown, cronExpr: unknown): {
-  triggerType: TriggerType;
-  cronExpr: string | null;
-} {
-  if (triggerType !== 'on_startup' && triggerType !== 'cron' && triggerType !== 'manual') {
-    throw new TemplateValidationError(
-      "trigger_type باید یکی از 'on_startup' | 'cron' | 'manual' باشه"
-    );
-  }
+function isPgUniqueViolation(e: unknown): boolean {
+  return (
+    typeof e === 'object' &&
+    e !== null &&
+    'code' in e &&
+    (e as { code?: string }).code === '23505'
+  );
+}
 
-  if (triggerType === 'cron') {
-    if (typeof cronExpr !== 'string' || cronExpr.trim().length === 0) {
-      throw new TemplateValidationError("برای trigger_type='cron' باید cron_expr بدی");
-    }
-    // اعتبارسنجی شکل ساده — BullMQ خودش با cron-parser پارس می‌کنه و اگه
-    // غلط باشه exception می‌ده. این فقط یه pre-flight ساده‌ست.
-    const parts = cronExpr.trim().split(/\s+/);
-    if (parts.length < 5 || parts.length > 6) {
-      throw new TemplateValidationError(
-        'cron_expr باید ۵ یا ۶ فیلد باشه (مثل "0 2 * * 0")'
-      );
-    }
-    return { triggerType, cronExpr: cronExpr.trim() };
+function validateCooldownSeconds(raw: unknown): number {
+  if (raw === undefined || raw === null) return 0;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) {
+    throw new TemplateValidationError('cooldown_seconds باید عدد صحیح ≥ 0 باشه');
   }
-
-  return { triggerType, cronExpr: null };
+  return n;
 }
 
 // ─── audit ──────────────────────────────────────────────────────────────
@@ -284,11 +239,9 @@ export async function setAutoBatchEnabled(
 
 export interface CreateTemplateInput {
   name: string;
-  enabled?: boolean;
+  status?: Status;
+  cooldownSeconds?: number;
   spec: unknown;
-  triggerType: unknown;
-  cronExpr?: unknown;
-  cooldownHours?: number | null;
 }
 
 export async function listTemplates(): Promise<BatchTemplate[]> {
@@ -307,18 +260,6 @@ export async function getTemplate(id: number): Promise<BatchTemplate | null> {
   return rowToTemplate(r.rows[0]);
 }
 
-export async function listEnabledByTrigger(
-  triggerType: TriggerType
-): Promise<BatchTemplate[]> {
-  const r = await pool.query<TemplateRow>(
-    `SELECT * FROM batch_templates
-       WHERE enabled = true AND trigger_type = $1
-       ORDER BY id ASC`,
-    [triggerType]
-  );
-  return r.rows.map(rowToTemplate);
-}
-
 export async function createTemplate(
   input: CreateTemplateInput,
   ctx: AuditCtx
@@ -331,46 +272,23 @@ export async function createTemplate(
   }
 
   const spec = validateSpec(input.spec);
-  const trig = validateTrigger(input.triggerType, input.cronExpr);
-  const cooldown =
-    input.cooldownHours == null ? null : Number(input.cooldownHours);
-  if (cooldown != null && (!Number.isInteger(cooldown) || cooldown < 0)) {
-    throw new TemplateValidationError('cooldown_hours باید عدد صحیح ≥ 0 باشه');
-  }
+  const cooldown = validateCooldownSeconds(input.cooldownSeconds);
+  const status: Status =
+    input.status === 'active' ? 'active' : 'paused'; // پیش‌فرض paused — اپراتور صراحتاً start می‌زنه
 
   const r = await pool.query<TemplateRow>(
     `INSERT INTO batch_templates
-       (name, enabled, spec_json, trigger_type, cron_expr, cooldown_hours, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+       (name, status, cooldown_seconds, spec_json, created_by)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING *`,
-    [
-      input.name.trim(),
-      input.enabled !== false,
-      JSON.stringify(spec),
-      trig.triggerType,
-      trig.cronExpr,
-      cooldown,
-      ctx.adminId,
-    ]
+    [input.name.trim(), status, cooldown, JSON.stringify(spec), ctx.adminId]
   );
 
   const t = rowToTemplate(r.rows[0]);
-
-  // اگه cron + enabled و expr داره، scheduler رو همین الان register کن
-  // تا منتظر restart نشیم.
-  if (t.triggerType === 'cron' && t.enabled && t.cronExpr) {
-    try {
-      await addCronScheduler(t.id, t.cronExpr);
-    } catch (e) {
-      console.warn(
-        `[batch-templates] addCronScheduler for new template ${t.id} failed: ${(e as Error).message}`
-      );
-    }
-  }
-
   await audit(ctx, 'batch_template_create', t.id, true, {
     name: t.name,
-    triggerType: t.triggerType,
+    status: t.status,
+    cooldownSeconds: t.cooldownSeconds,
     spec,
   });
   return t;
@@ -378,11 +296,8 @@ export async function createTemplate(
 
 export interface UpdateTemplateInput {
   name?: string;
-  enabled?: boolean;
   spec?: unknown;
-  triggerType?: unknown;
-  cronExpr?: unknown;
-  cooldownHours?: number | null;
+  cooldownSeconds?: number;
 }
 
 export async function updateTemplate(
@@ -404,35 +319,15 @@ export async function updateTemplate(
     sets.push(`name = $${p++}`);
     params.push(input.name.trim());
   }
-  if (input.enabled !== undefined) {
-    sets.push(`enabled = $${p++}`);
-    params.push(Boolean(input.enabled));
-  }
   if (input.spec !== undefined) {
     const spec = validateSpec(input.spec);
     sets.push(`spec_json = $${p++}`);
     params.push(JSON.stringify(spec));
   }
-  if (input.triggerType !== undefined || input.cronExpr !== undefined) {
-    const tt = input.triggerType ?? existing.triggerType;
-    const ce = input.cronExpr === undefined ? existing.cronExpr : input.cronExpr;
-    const trig = validateTrigger(tt, ce);
-    sets.push(`trigger_type = $${p++}`);
-    params.push(trig.triggerType);
-    sets.push(`cron_expr = $${p++}`);
-    params.push(trig.cronExpr);
-  }
-  if (input.cooldownHours !== undefined) {
-    if (input.cooldownHours == null) {
-      sets.push(`cooldown_hours = NULL`);
-    } else {
-      const n = Number(input.cooldownHours);
-      if (!Number.isInteger(n) || n < 0) {
-        throw new TemplateValidationError('cooldown_hours باید عدد صحیح ≥ 0 باشه');
-      }
-      sets.push(`cooldown_hours = $${p++}`);
-      params.push(n);
-    }
+  if (input.cooldownSeconds !== undefined) {
+    const n = validateCooldownSeconds(input.cooldownSeconds);
+    sets.push(`cooldown_seconds = $${p++}`);
+    params.push(n);
   }
 
   if (sets.length === 0) return existing;
@@ -444,27 +339,6 @@ export async function updateTemplate(
   );
 
   const t = rowToTemplate(r.rows[0]);
-
-  // sync کردن BullMQ scheduler با وضعیت جدید template:
-  //   - قبلاً cron بود ولی trigger عوض شد یا cronExpr عوض شد یا disabled شد
-  //     → scheduler قبلی پاک می‌شه
-  //   - الان cron + enabled و expr داره (و قبلاً نبود یا تغییر کرد) → re-register
-  // delete-then-add ساده‌ترین راهه که هم expr-change و هم enable/disable رو پوشش می‌ده.
-  const wasCron = existing.triggerType === 'cron';
-  const isCron = t.triggerType === 'cron' && t.enabled && t.cronExpr;
-  if (wasCron) {
-    await removeCronScheduler(t.id);
-  }
-  if (isCron) {
-    try {
-      await addCronScheduler(t.id, t.cronExpr!);
-    } catch (e) {
-      console.warn(
-        `[batch-templates] re-add scheduler for template ${t.id} failed: ${(e as Error).message}`
-      );
-    }
-  }
-
   await audit(ctx, 'batch_template_update', t.id, true, {
     changedFields: Object.keys(input),
   });
@@ -472,16 +346,48 @@ export async function updateTemplate(
 }
 
 export async function deleteTemplate(id: number, ctx: AuditCtx): Promise<boolean> {
-  // قبل از delete رکورد، اگه trigger=cron بود scheduler رو هم پاک کن تا
-  // BullMQ بعدش fire نکنه (و worker با 'not_found' روبرو نشه).
-  const existing = await getTemplate(id);
-  if (existing && existing.triggerType === 'cron') {
-    await removeCronScheduler(id);
-  }
   const r = await pool.query(`DELETE FROM batch_templates WHERE id = $1`, [id]);
   const ok = (r.rowCount ?? 0) > 0;
   await audit(ctx, 'batch_template_delete', id, ok, {});
   return ok;
+}
+
+/**
+ * status رو بین 'active' و 'paused' تغییر می‌ده. اگه قبلاً همون مقدار بوده،
+ * بدون تغییر برمی‌گرده ولی audit log می‌ندازه (برای trace operator action).
+ *
+ * pause از روی یه chain فعال:
+ *   - batch فعلی عادی تموم می‌شه (هیچ‌جا cancel نمی‌کنیم)
+ *   - chain-spawn هندلر تو generation worker وقتی finalize می‌بینه
+ *     status='paused' هست، spawn نمی‌کنه و chain تموم می‌شه
+ *
+ * resume:
+ *   - فقط status رو 'active' می‌کنه. خود این batch جدید fire نمی‌کنه؛
+ *     bootstrap اولین run با /start (که دستی runTemplate صدا می‌زنه) انجام می‌شه.
+ */
+export async function setTemplateStatus(
+  id: number,
+  status: Status,
+  ctx: AuditCtx,
+  details: Record<string, unknown> = {},
+): Promise<BatchTemplate | null> {
+  const existing = await getTemplate(id);
+  if (!existing) return null;
+
+  if (existing.status !== status) {
+    await pool.query(
+      `UPDATE batch_templates SET status = $1 WHERE id = $2`,
+      [status, id]
+    );
+  }
+
+  await audit(ctx, 'batch_template_status', id, true, {
+    from: existing.status,
+    to: status,
+    ...details,
+  });
+
+  return { ...existing, status };
 }
 
 // ─── runTemplate ────────────────────────────────────────────────────────
@@ -508,21 +414,27 @@ export class RunBlockedError extends Error {
 /**
  * یه template رو اجرا می‌کنه. مراحل:
  *   1) circuit breaker check (AUTO_BATCH_ENABLED)
- *   2) idempotency: اگه آخرین job مال این template هنوز pending/running ست،
+ *   2) اگه trigger='chain' و status='paused' → skip (chain متوقفه)
+ *      manual به status بی‌اعتنا‌ست — escape hatch برای force-run
+ *   3) idempotency: اگه آخرین job مال این template هنوز pending/running ست،
  *      همون رو برمی‌گردونه (reused=true)
- *   3) startUserId رو حل می‌کنه (template ست کرده یا MAX(user_id)+1)
- *   4) overlap check روی wallets
- *   5) generation_jobs row می‌سازه
- *   6) batch رو به chunkهای chunkSize تقسیم می‌کنه و enqueue می‌کنه
- *   7) batch_templates.last_run_at و last_job_id رو به‌روز می‌کنه
- *   8) audit log
+ *   4) startUserId رو حل می‌کنه (template ست کرده یا MAX(user_id)+1)
+ *   5) overlap check روی wallets
+ *   6) generation_jobs row می‌سازه (با template_id و parent_job_id)
+ *   7) batch رو به chunkهای chunkSize تقسیم می‌کنه و enqueue می‌کنه
+ *   8) batch_templates.last_run_at و last_job_id رو به‌روز می‌کنه
+ *   9) audit log
  *
- * @param triggerCtx 'manual' | 'cron' | 'on_startup' برای audit
+ * @param parentJobId job ای که finalize-ش این run رو spawn کرد. فقط
+ *   trigger='chain' این رو set می‌کنه. unique-index روی parent_job_id
+ *   تو generation_jobs تضمین می‌کنه که هر parent حداکثر یه child داشته باشه
+ *   حتی اگه finalize handler دو بار fire بشه. کالر باید 23505 رو catch کنه.
  */
 export async function runTemplate(
   templateId: number,
-  triggerCtx: 'manual' | 'cron' | 'on_startup',
-  ctx: AuditCtx
+  triggerCtx: 'manual' | 'chain',
+  ctx: AuditCtx,
+  parentJobId: number | null = null,
 ): Promise<RunResult> {
   // 1) circuit breaker
   const cb = await isAutoBatchEnabled();
@@ -542,15 +454,18 @@ export async function runTemplate(
   if (!t) {
     throw new RunBlockedError('not_found', `template ${templateId} پیدا نشد`);
   }
-  if (!t.enabled) {
+
+  // 2) chain-spawn فقط وقتی status='active' باشه fire می‌شه. manual بی‌اعتناست.
+  if (triggerCtx === 'chain' && t.status !== 'active') {
     await audit(ctx, 'batch_template_run', templateId, false, {
-      reason: 'disabled',
+      reason: 'paused',
       trigger: triggerCtx,
+      parentJobId,
     });
-    throw new RunBlockedError('disabled', 'template غیرفعال است');
+    throw new RunBlockedError('paused', 'chain متوقف شده — spawn رد شد');
   }
 
-  // 2) idempotency: لای آخرین job این template
+  // 3) idempotency: لای آخرین job این template
   if (t.lastJobId != null) {
     const last = await pool.query<{ status: string }>(
       `SELECT status FROM generation_jobs WHERE id = $1`,
@@ -568,11 +483,11 @@ export async function runTemplate(
           `SELECT chunks_total, start_user_id FROM generation_jobs WHERE id = $1`,
           [t.lastJobId]
         );
-        const ct = detail.rows[0]?.chunks_total ?? 1;
+        const cT = detail.rows[0]?.chunks_total ?? 1;
         const sui = detail.rows[0]?.start_user_id ? Number(detail.rows[0].start_user_id) : 0;
         return {
           jobDbId: t.lastJobId,
-          chunksTotal: ct,
+          chunksTotal: cT,
           chunkSize: t.spec.chunkSize ?? DEFAULT_CHUNK_SIZE,
           startUserId: sui,
           reused: true,
@@ -581,7 +496,7 @@ export async function runTemplate(
     }
   }
 
-  // 3) resolve startUserId
+  // 4) resolve startUserId
   const spec = t.spec;
   let start = spec.startUserId;
   if (!start) {
@@ -591,7 +506,7 @@ export async function runTemplate(
     start = Number(r.rows[0].next);
   }
 
-  // 4) overlap check
+  // 5) overlap check
   const overlap = await pool.query<{ cnt: string }>(
     `SELECT COUNT(*)::text AS cnt FROM wallets
        WHERE user_id >= $1 AND user_id < $2`,
@@ -610,23 +525,54 @@ export async function runTemplate(
     );
   }
 
-  // 5) chunk sizing
+  // 6) chunk sizing
   const chunkSize = Math.max(1, Math.min(spec.chunkSize ?? DEFAULT_CHUNK_SIZE, spec.count));
   const chunksTotal = Math.ceil(spec.count / chunkSize);
 
-  // 6) generation_jobs row
-  const jobRow = await pool.query<{ id: string }>(
-    `INSERT INTO generation_jobs
-       (requested_by, word_count, total_count, status,
-        chunks_total, chunks_done, failed_count,
-        addresses_per_wallet, start_user_id)
-     VALUES ($1, $2, $3, 'pending', $4, 0, 0, $5, $6)
-     RETURNING id`,
-    [ctx.adminId, spec.wordCount, spec.count, chunksTotal, spec.addressesPerWallet, start]
-  );
-  const jobDbId = Number(jobRow.rows[0].id);
+  // 7) generation_jobs row — template_id و parent_job_id رو ست می‌کنیم.
+  // اگه parent_job_id duplicate باشه (race بین دو chain-spawn handler)،
+  // unique-index روی generation_jobs(parent_job_id) WHERE NOT NULL برای 23505
+  // raise می‌ده. اون‌جا تبدیل به RunBlockedError('duplicate_chain_spawn') می‌شه
+  // که کالر هندل می‌کنه (ad-hoc inline تو generation worker یا template-chain
+  // worker — هردو RunBlockedError رو فقط log می‌کنن و موفق برمی‌گردن).
+  let jobDbId: number;
+  try {
+    const jobRow = await pool.query<{ id: string }>(
+      `INSERT INTO generation_jobs
+         (requested_by, word_count, total_count, status,
+          chunks_total, chunks_done, failed_count,
+          addresses_per_wallet, start_user_id,
+          template_id, parent_job_id)
+       VALUES ($1, $2, $3, 'pending', $4, 0, 0, $5, $6, $7, $8)
+       RETURNING id`,
+      [
+        ctx.adminId,
+        spec.wordCount,
+        spec.count,
+        chunksTotal,
+        spec.addressesPerWallet,
+        start,
+        templateId,
+        parentJobId,
+      ]
+    );
+    jobDbId = Number(jobRow.rows[0].id);
+  } catch (e) {
+    if (parentJobId != null && isPgUniqueViolation(e)) {
+      await audit(ctx, 'batch_template_run', templateId, false, {
+        reason: 'duplicate_chain_spawn',
+        trigger: triggerCtx,
+        parentJobId,
+      });
+      throw new RunBlockedError(
+        'duplicate_chain_spawn',
+        `parent ${parentJobId} already has a chain child — race lost`
+      );
+    }
+    throw e;
+  }
 
-  // 7) enqueue chunks
+  // 8) enqueue chunks
   for (let i = 0; i < chunksTotal; i++) {
     const chunkStart = start + i * chunkSize;
     const chunkCount = Math.min(chunkSize, spec.count - i * chunkSize);
@@ -645,7 +591,7 @@ export async function runTemplate(
     );
   }
 
-  // 8) update template last_run_at + last_job_id
+  // 9) update template last_run_at + last_job_id
   await pool.query(
     `UPDATE batch_templates
         SET last_run_at = NOW(), last_job_id = $1
@@ -656,6 +602,7 @@ export async function runTemplate(
   await audit(ctx, 'batch_template_run', templateId, true, {
     trigger: triggerCtx,
     jobDbId,
+    parentJobId,
     startUserId: start,
     chunksTotal,
     chunkSize,
@@ -663,33 +610,4 @@ export async function runTemplate(
   });
 
   return { jobDbId, chunksTotal, chunkSize, startUserId: start, reused: false };
-}
-
-// ─── on_startup gate ────────────────────────────────────────────────────
-
-/**
- * بررسی می‌کنه که آیا یه on_startup template الان باید fire بشه یا نه.
- * منطق: اگه last_run_at نداریم → fire. اگه گذشته‌ی اخیر < cooldown_hours
- * (با پیش‌فرض ۲۴h) → skip.
- */
-export function shouldFireOnStartup(t: BatchTemplate, now: Date = new Date()): {
-  fire: boolean;
-  reason: string;
-} {
-  if (!t.enabled) return { fire: false, reason: 'disabled' };
-  if (t.triggerType !== 'on_startup') return { fire: false, reason: 'wrong_trigger' };
-
-  const cooldown = t.cooldownHours ?? DEFAULT_COOLDOWN_HOURS;
-  if (cooldown === 0) return { fire: true, reason: 'no_cooldown' };
-  if (!t.lastRunAt) return { fire: true, reason: 'first_run' };
-
-  const ageMs = now.getTime() - new Date(t.lastRunAt).getTime();
-  const cooldownMs = cooldown * 3600 * 1000;
-  if (ageMs >= cooldownMs) {
-    return { fire: true, reason: 'cooldown_elapsed' };
-  }
-  return {
-    fire: false,
-    reason: `cooldown (${Math.round((cooldownMs - ageMs) / 60000)}min remaining)`,
-  };
 }

@@ -4,7 +4,10 @@
  *   POST   /api/batch-templates           — ساخت (super_admin)
  *   PATCH  /api/batch-templates/:id       — ویرایش (super_admin)
  *   DELETE /api/batch-templates/:id       — حذف (super_admin)
- *   POST   /api/batch-templates/:id/run   — اجرای دستی (super_admin، idempotent)
+ *   POST   /api/batch-templates/:id/start — chain رو فعال کن و اولین batch
+ *                                            رو fire کن (super_admin)
+ *   POST   /api/batch-templates/:id/pause — chain رو متوقف کن (super_admin).
+ *                                            batch فعلی عادی تموم می‌شه.
  *
  *   GET    /api/system/auto-batch         — وضعیت circuit breaker
  *   PUT    /api/system/auto-batch         — toggle circuit breaker (super_admin)
@@ -15,11 +18,11 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import {
   listTemplates,
-  getTemplate,
   createTemplate,
   updateTemplate,
   deleteTemplate,
   runTemplate,
+  setTemplateStatus,
   isAutoBatchEnabled,
   setAutoBatchEnabled,
   TemplateValidationError,
@@ -51,11 +54,8 @@ export async function batchTemplateRoutes(app: FastifyInstance): Promise<void> {
   app.post<{
     Body: {
       name: string;
-      enabled?: boolean;
       spec: unknown;
-      triggerType: unknown;
-      cronExpr?: unknown;
-      cooldownHours?: number | null;
+      cooldownSeconds?: number;
     };
   }>(
     '/api/batch-templates',
@@ -64,14 +64,11 @@ export async function batchTemplateRoutes(app: FastifyInstance): Promise<void> {
       schema: {
         body: {
           type: 'object',
-          required: ['name', 'spec', 'triggerType'],
+          required: ['name', 'spec'],
           properties: {
             name: { type: 'string', minLength: 1, maxLength: 100 },
-            enabled: { type: 'boolean' },
             spec: { type: 'object' },
-            triggerType: { type: 'string', enum: ['on_startup', 'cron', 'manual'] },
-            cronExpr: { type: 'string', maxLength: 100, nullable: true },
-            cooldownHours: { type: 'integer', minimum: 0, nullable: true },
+            cooldownSeconds: { type: 'integer', minimum: 0 },
           },
         },
       },
@@ -94,11 +91,8 @@ export async function batchTemplateRoutes(app: FastifyInstance): Promise<void> {
     Params: { id: string };
     Body: {
       name?: string;
-      enabled?: boolean;
       spec?: unknown;
-      triggerType?: unknown;
-      cronExpr?: unknown;
-      cooldownHours?: number | null;
+      cooldownSeconds?: number;
     };
   }>(
     '/api/batch-templates/:id',
@@ -136,9 +130,11 @@ export async function batchTemplateRoutes(app: FastifyInstance): Promise<void> {
     }
   );
 
-  // ─── POST /api/batch-templates/:id/run ───
+  // ─── POST /api/batch-templates/:id/start ───
+  // chain رو فعال می‌کنه و اولین batch رو می‌زنه. idempotent: اگه قبلاً
+  // active بوده و یه batch تو فلایت داره، runTemplate همون رو reuse می‌کنه.
   app.post<{ Params: { id: string } }>(
-    '/api/batch-templates/:id/run',
+    '/api/batch-templates/:id/start',
     { preHandler: superOnly },
     async (req, reply) => {
       const id = Number(req.params.id);
@@ -146,14 +142,33 @@ export async function batchTemplateRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(400).send({ error: 'invalid id' });
       }
       try {
+        const t = await setTemplateStatus(id, 'active', ctxFrom(req), { reason: 'chain_start' });
+        if (!t) return reply.code(404).send({ error: 'not found' });
         const result = await runTemplate(id, 'manual', ctxFrom(req));
-        return reply.code(result.reused ? 200 : 201).send(result);
+        return reply.code(result.reused ? 200 : 201).send({ template: t, run: result });
       } catch (e) {
         if (e instanceof RunBlockedError) {
           return reply.code(e.statusCode).send({ error: e.message, code: e.code });
         }
         throw e;
       }
+    }
+  );
+
+  // ─── POST /api/batch-templates/:id/pause ───
+  // chain رو متوقف می‌کنه. batch فعلی عادی تموم می‌شه ولی spawn بعدی
+  // skip می‌شه (chain handler status='paused' رو می‌بینه).
+  app.post<{ Params: { id: string } }>(
+    '/api/batch-templates/:id/pause',
+    { preHandler: superOnly },
+    async (req, reply) => {
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) {
+        return reply.code(400).send({ error: 'invalid id' });
+      }
+      const t = await setTemplateStatus(id, 'paused', ctxFrom(req), { reason: 'chain_pause' });
+      if (!t) return reply.code(404).send({ error: 'not found' });
+      return t;
     }
   );
 

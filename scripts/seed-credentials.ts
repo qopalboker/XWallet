@@ -3,8 +3,8 @@
  *
  * استفاده:
  *   1. تو .env بذار:
- *        INITIAL_TRONGRID_KEYS=key1,key2,key3
  *        INITIAL_ETH_RPCS=https://...,https://...
+ *        INITIAL_BTC_APIS=https://...,https://...
  *   2. npx tsx scripts/seed-credentials.ts
  *   3. بعد خطوط INITIAL_* رو از .env پاک کن (دیگه نیاز نیست)
  *
@@ -54,7 +54,6 @@ async function main() {
   console.log('Seeding API credentials from env...\n');
 
   const total =
-    (await seedForProvider('INITIAL_TRONGRID_KEYS', 'trongrid')) +
     (await seedForProvider('INITIAL_ETH_RPCS', 'eth_rpc')) +
     (await seedForProvider('INITIAL_BTC_APIS', 'btc_api'));
 
