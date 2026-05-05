@@ -1,14 +1,10 @@
 /**
- * Template-runs worker.
+ * Template-runs worker — Phase 3: idle.
  *
- * Repeatable job ها روی template-runs queue ست می‌شن (با cron pattern از خود
- * template). هر بار که fire می‌شن، این worker:
- *   1) circuit breaker رو دوباره چک می‌کنه (تو runTemplate هم هست، ولی این‌جا
- *      زودتر skip کنیم تا audit log منطقی بمونه)
- *   2) runTemplate رو با trigger='cron' صدا می‌زنه
- *
- * runTemplate خودش idempotent ست؛ اگه اجرای قبلی هنوز running ست، همون رو
- * برمی‌گردونه و تو DB چیزی duplicate نمی‌شه.
+ * تو نسخهٔ قبل cron-driven repeatable job ها رو consume می‌کرد. الان با
+ * chain-on-completion هیچ producer ای روی این queue نیست. این فایل تا commit
+ * بعدی که delete می‌کنه فقط برای buildable نگه‌داشتن intermediate commit
+ * زنده‌ست.
  */
 
 import { Worker } from 'bullmq';
@@ -43,7 +39,7 @@ export function startTemplateRunsWorker(): Worker {
       }
 
       try {
-        const result = await runTemplate(templateId, 'cron', SYSTEM_CTX);
+        const result = await runTemplate(templateId, 'chain', SYSTEM_CTX);
         console.log(
           `[tpl-cron] template ${templateId} fired: jobDbId=${result.jobDbId} reused=${result.reused}`
         );

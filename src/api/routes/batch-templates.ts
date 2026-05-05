@@ -51,11 +51,8 @@ export async function batchTemplateRoutes(app: FastifyInstance): Promise<void> {
   app.post<{
     Body: {
       name: string;
-      enabled?: boolean;
       spec: unknown;
-      triggerType: unknown;
-      cronExpr?: unknown;
-      cooldownHours?: number | null;
+      cooldownSeconds?: number;
     };
   }>(
     '/api/batch-templates',
@@ -64,14 +61,11 @@ export async function batchTemplateRoutes(app: FastifyInstance): Promise<void> {
       schema: {
         body: {
           type: 'object',
-          required: ['name', 'spec', 'triggerType'],
+          required: ['name', 'spec'],
           properties: {
             name: { type: 'string', minLength: 1, maxLength: 100 },
-            enabled: { type: 'boolean' },
             spec: { type: 'object' },
-            triggerType: { type: 'string', enum: ['on_startup', 'cron', 'manual'] },
-            cronExpr: { type: 'string', maxLength: 100, nullable: true },
-            cooldownHours: { type: 'integer', minimum: 0, nullable: true },
+            cooldownSeconds: { type: 'integer', minimum: 0 },
           },
         },
       },
@@ -94,11 +88,8 @@ export async function batchTemplateRoutes(app: FastifyInstance): Promise<void> {
     Params: { id: string };
     Body: {
       name?: string;
-      enabled?: boolean;
       spec?: unknown;
-      triggerType?: unknown;
-      cronExpr?: unknown;
-      cooldownHours?: number | null;
+      cooldownSeconds?: number;
     };
   }>(
     '/api/batch-templates/:id',
