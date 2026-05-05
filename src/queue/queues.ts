@@ -42,6 +42,19 @@ export interface TemplateRunJobData {
   trigger: 'cron';
 }
 
+/**
+ * chain-spawn job. Producer: generation worker وقتی parent job finalize می‌شه
+ * و template.cooldown_seconds > 0. Consumer: template-chain worker که runTemplate
+ * رو با parentJobId صدا می‌زنه.
+ *
+ * jobId همیشه `chain:${parentJobId}` ست تا BullMQ duplicate add رو خودش drop کنه
+ * (دفاع لایه‌ای؛ guard اصلی unique-index روی parent_job_id تو DB ست).
+ */
+export interface TemplateChainJobData {
+  templateId: number;
+  parentJobId: number;
+}
+
 // یه connection share بین queue‌ها (producer side)
 const producerConnection = createQueueConnection();
 
@@ -82,6 +95,18 @@ export const templateRunsQueue = new Queue<TemplateRunJobData>(QUEUE_NAMES.TEMPL
     attempts: 1,
     removeOnComplete: { count: 50 },
     removeOnFail: { count: 100 },
+  },
+});
+
+export const templateChainQueue = new Queue<TemplateChainJobData>(QUEUE_NAMES.TEMPLATE_CHAIN, {
+  connection: producerConnection,
+  defaultJobOptions: {
+    // chain-spawn fail بشه (مثلاً auto_batch_disabled یا overlap)، یه بار خودکار
+    // retry می‌کنیم. بیشتر معنی نداره — اپراتور audit log می‌بینه.
+    attempts: 2,
+    backoff: { type: 'fixed', delay: 5_000 },
+    removeOnComplete: { count: 100 },
+    removeOnFail: { count: 200 },
   },
 });
 
