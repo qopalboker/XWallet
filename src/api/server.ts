@@ -23,12 +23,10 @@ import authRoutes from './routes/auth.js';
 import walletRoutes from './routes/wallets.js';
 import { jobRoutes } from './routes/jobs.js';
 import { credentialRoutes } from './routes/credentials.js';
-import { benchmarkRoutes } from './routes/benchmark.js';
 import { statsRoutes } from './routes/stats.js';
 import { testRoutes } from './routes/test.js';
 import { batchTemplateRoutes } from './routes/batch-templates.js';
 import { registerAuthDecorators } from '../auth/index.js';
-import { cleanupOnStartup } from '../services/benchmark-service.js';
 import { verifyRegionOnBoot } from '../services/getblock.js';
 import { cleanupExpiredSessions } from '../auth/jwt.js';
 import { closePool } from '../db/pool.js';
@@ -165,7 +163,6 @@ export async function buildServer() {
   await app.register(walletRoutes, { prefix: '/api/wallets' });
   await app.register(jobRoutes);
   await app.register(credentialRoutes);
-  await app.register(benchmarkRoutes);
   await app.register(statsRoutes);
   await app.register(testRoutes);
   await app.register(batchTemplateRoutes);
@@ -211,7 +208,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       app.log.info(`پنل روی ${host}:${port} بالا اومد`);
 
       // cleanup های یه‌بارمصرف startup
-      await cleanupOnStartup();
       await cleanupExpiredSessions().catch((e) => app.log.warn({ e }, 'session cleanup failed'));
       // chk GetBlock region reachability؛ اگه fail شد فقط warn می‌ده،
       // startup رو block نمی‌کنه.

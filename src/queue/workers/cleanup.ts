@@ -5,7 +5,6 @@
  *   - admin_audit_log         > AUDIT_LOG_RETENTION_DAYS (90)
  *   - mnemonic_access_log     > MNEMONIC_LOG_RETENTION_DAYS (365)
  *   - admin_sessions revoked/expired > SESSION_RETENTION_DAYS (7)
- *   - benchmark_runs                > BENCHMARK_RETENTION_DAYS (180)
  *   - generation_jobs که completed/failed و خیلی قدیمی هستن > 90 days
  *
  * threshold ها از env قابل تنظیم.
@@ -19,7 +18,6 @@ interface CleanupResult {
   audit: number;
   mnemonicAccess: number;
   sessions: number;
-  benchmarks: number;
   generationJobs: number;
 }
 
@@ -32,10 +30,9 @@ export async function runCleanup(): Promise<CleanupResult> {
   const auditDays = envDays('AUDIT_LOG_RETENTION_DAYS', 90);
   const mnemonicDays = envDays('MNEMONIC_LOG_RETENTION_DAYS', 365);
   const sessionDays = envDays('SESSION_RETENTION_DAYS', 7);
-  const benchmarkDays = envDays('BENCHMARK_RETENTION_DAYS', 180);
   const jobDays = envDays('GENERATION_JOB_RETENTION_DAYS', 90);
 
-  const [audit, mnemonicAccess, sessions, benchmarks, generationJobs] = await Promise.all([
+  const [audit, mnemonicAccess, sessions, generationJobs] = await Promise.all([
     pool.query(
       `DELETE FROM admin_audit_log WHERE created_at < NOW() - ($1 || ' days')::interval`,
       [auditDays.toString()]
@@ -51,12 +48,6 @@ export async function runCleanup(): Promise<CleanupResult> {
       [sessionDays.toString()]
     ),
     pool.query(
-      `DELETE FROM benchmark_runs
-       WHERE status IN ('completed', 'stopped', 'failed')
-         AND COALESCE(completed_at, created_at) < NOW() - ($1 || ' days')::interval`,
-      [benchmarkDays.toString()]
-    ),
-    pool.query(
       `DELETE FROM generation_jobs
        WHERE status IN ('completed', 'partial', 'failed')
          AND COALESCE(completed_at, created_at) < NOW() - ($1 || ' days')::interval`,
@@ -68,7 +59,6 @@ export async function runCleanup(): Promise<CleanupResult> {
     audit: audit.rowCount ?? 0,
     mnemonicAccess: mnemonicAccess.rowCount ?? 0,
     sessions: sessions.rowCount ?? 0,
-    benchmarks: benchmarks.rowCount ?? 0,
     generationJobs: generationJobs.rowCount ?? 0,
   };
 }

@@ -5,7 +5,6 @@
  *   DELETE /api/credentials/:id                  - حذف
  *   POST   /api/credentials/:id/toggle           - فعال/غیرفعال
  *   POST   /api/credentials/:id/unblock          - آزاد کردن rate limit
- *   POST   /api/credentials/:id/benchmark        - toggle benchmark_allowed
  *   POST   /api/credentials/getblock/import      - import یکجا از GetBlock JSON
  */
 
@@ -17,7 +16,6 @@ import {
   deleteCredential,
   setActive,
   clearRateLimit,
-  setBenchmarkAllowed,
   type Provider,
 } from '../../services/credentials-service.js';
 import { importGetBlockConfig } from '../../services/getblock.js';
@@ -98,16 +96,6 @@ export async function credentialRoutes(app: FastifyInstance) {
     { preHandler: authed },
     async (request) => {
       await clearRateLimit(Number(request.params.id));
-      return { ok: true };
-    }
-  );
-
-  // ─── POST /api/credentials/:id/benchmark ───
-  app.post<{ Params: { id: string }; Body: { allowed: boolean } }>(
-    '/api/credentials/:id/benchmark',
-    { preHandler: authed },
-    async (request) => {
-      await setBenchmarkAllowed(Number(request.params.id), !!request.body.allowed);
       return { ok: true };
     }
   );

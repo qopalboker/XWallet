@@ -10,7 +10,7 @@ export async function statsRoutes(app: FastifyInstance) {
   const authed = [app.requireAuth, app.requireNotMustChange];
 
   app.get('/api/stats', { preHandler: authed }, async () => {
-    const [wallets, addresses, balances, jobs, benchmarks] = await Promise.all([
+    const [wallets, addresses, balances, jobs] = await Promise.all([
       pool.query<{ total: string; words12: string; words24: string }>(
         `SELECT COUNT(*)::text AS total,
                 COUNT(*) FILTER (WHERE word_count = 12)::text AS words12,
@@ -43,11 +43,6 @@ export async function statsRoutes(app: FastifyInstance) {
          WHERE created_at > NOW() - INTERVAL '30 days'
          GROUP BY status`
       ),
-      pool.query<{ total: string; running: string }>(
-        `SELECT COUNT(*)::text AS total,
-                COUNT(*) FILTER (WHERE status = 'running')::text AS running
-         FROM benchmark_runs`
-      ),
     ]);
 
     const balanceMap: Record<string, { count: number; native: string; usdt: string }> = {};
@@ -76,10 +71,6 @@ export async function statsRoutes(app: FastifyInstance) {
       },
       balances: balanceMap,
       jobs: jobsMap,
-      benchmarks: {
-        total: Number(benchmarks.rows[0].total),
-        running: Number(benchmarks.rows[0].running),
-      },
     };
   });
 }

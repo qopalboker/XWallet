@@ -3,6 +3,7 @@
  *   GET    /api/jobs           - لیست generation jobs (با pagination)
  *   GET    /api/jobs/:id       - جزئیات یه job
  *   POST   /api/jobs/generate  - job جدید batch generation بساز
+ *   DELETE /api/jobs/:id       - حذف batch job (و chunks متناظر تو BullMQ)
  *   POST   /api/jobs/balance-now - یه balance check فوری trigger کن
  *   GET    /api/queue-stats    - آمار صف‌ها
  */
@@ -173,6 +174,41 @@ export async function jobRoutes(app: FastifyInstance) {
         chunksTotal,
         chunkSize,
       });
+    }
+  );
+
+  // ─── DELETE /api/jobs/:id ───
+  // batch row رو از DB حذف می‌کنه و BullMQ chunkها (waiting/delayed/active)
+  // رو که هنوز پردازش نشدن remove می‌کنه. ولت‌های ساخته‌شده دست‌نخورده می‌مونن.
+  app.delete<{ Params: { id: string } }>(
+    '/api/jobs/:id',
+    { preHandler: authed },
+    async (request, reply) => {
+      const id = Number(request.params.id);
+      if (!Number.isInteger(id) || id < 1) {
+        return reply.code(400).send({ error: 'invalid id' });
+      }
+
+      const row = await pool.query<{ chunks_total: number }>(
+        `SELECT chunks_total FROM generation_jobs WHERE id = $1`,
+        [id]
+      );
+      if (row.rows.length === 0) {
+        return reply.code(404).send({ error: 'not found' });
+      }
+
+      const chunks = Number(row.rows[0].chunks_total) || 0;
+      for (let i = 0; i < chunks; i++) {
+        try {
+          const bj = await generationQueue.getJob(`gen:${id}:${i}`);
+          if (bj) await bj.remove();
+        } catch (e) {
+          request.log.warn({ e, jobDbId: id, chunkIndex: i }, 'failed to remove BullMQ chunk');
+        }
+      }
+
+      await pool.query(`DELETE FROM generation_jobs WHERE id = $1`, [id]);
+      return { ok: true };
     }
   );
 
