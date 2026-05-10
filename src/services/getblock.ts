@@ -505,9 +505,6 @@ export async function importGetBlockConfig(
       value,
       label,
       adminId: opts.adminId,
-      // GetBlock free tier = 50k CU/day. یه benchmark run می‌تونه کل این
-      // سهمیه رو بخوره و traffic واقعی تا فردا بیکار بشه. پس پیش‌فرض false.
-      benchmarkAllowed: false,
     });
     existingLabels.add(dedupKey);
     result.added++;

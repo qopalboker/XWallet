@@ -14,7 +14,7 @@
  *     npx tsx scripts/import-getblock.ts
  *
  * نگاشت به provider های داخلی:
- *   eth mainnet jsonRpc → provider='eth_rpc' (URL کامل GetBlock؛ benchmark_allowed=false)
+ *   eth mainnet jsonRpc → provider='eth_rpc' (URL کامل GetBlock)
  *   btc mainnet jsonRpc → skip با لاگ واضح (فعلاً مصرف‌کننده نداریم)
  *
  * اسکریپت idempotent هست: بر پایهٔ (provider, label) dedup می‌کنه و logic

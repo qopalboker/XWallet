@@ -25,4 +25,6 @@ export const QUEUE_NAMES = {
   CLEANUP: 'cleanup',
   /** chain-spawn delayed jobs برای template هایی که cooldown_seconds > 0 دارن. */
   TEMPLATE_CHAIN: 'template-chain',
+  /** ولت‌های تازه‌ساخته‌شده که بعد از ۱۰s اگه موجودی ندارن حذف می‌شن. */
+  EMPTY_WALLET_CLEANUP: 'empty-wallet-cleanup',
 } as const;

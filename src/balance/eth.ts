@@ -8,11 +8,6 @@
  *   - 429 → markRateLimited(60s) و retry با credential دیگه
  *   - 401/403 → markAuthFailed (deactivate) و retry با credential دیگه
  *   - بقیهٔ خطاها → markError و throw (caller باید job level‌ش رو retry کنه)
- *
- * forBenchmark=true: فقط credential هایی که benchmark_allowed=true
- * دارن استفاده می‌شن (محافظ سهمیهٔ GetBlock). اگه هیچ کدوم نبود، سریع
- * NoAvailableCredential می‌ده (نه fall back به public RPC که خودش
- * rate-limit می‌خوره).
  */
 
 import { JsonRpcProvider, Interface, Contract } from 'ethers';
@@ -22,7 +17,6 @@ import {
   markError,
   markRateLimited,
   markAuthFailed,
-  NoAvailableCredential,
   type CredentialRow,
 } from '../services/credentials-service.js';
 import { redactGetBlockUrl } from '../services/getblock.js';
@@ -59,13 +53,8 @@ export interface EthBalanceResult {
   usdt: bigint;
 }
 
-export interface BatchOpts {
-  forBenchmark?: boolean;
-}
-
 export async function batchEthBalances(
-  addresses: string[],
-  opts: BatchOpts = {}
+  addresses: string[]
 ): Promise<EthBalanceResult[]> {
   if (addresses.length === 0) return [];
 
@@ -74,7 +63,7 @@ export async function batchEthBalances(
 
   for (let i = 0; i < addresses.length; i += CHUNK) {
     const chunk = addresses.slice(i, i + CHUNK);
-    const chunkResults = await batchChunk(chunk, opts);
+    const chunkResults = await batchChunk(chunk);
     results.push(...chunkResults);
   }
 
@@ -107,8 +96,7 @@ function classifyEthersError(err: unknown): 'throttled' | 'auth_failed' | 'error
 }
 
 async function batchChunk(
-  addresses: string[],
-  opts: BatchOpts
+  addresses: string[]
 ): Promise<EthBalanceResult[]> {
   const tried = new Set<number>();
   let lastErr: unknown;
@@ -116,7 +104,6 @@ async function batchChunk(
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const cred: CredentialRow | null = await pickCredential('eth_rpc', {
-      forBenchmark: opts.forBenchmark,
       excludeIds: tried,
     });
 
@@ -125,11 +112,6 @@ async function batchChunk(
       rpcUrl = cred.value;
       tried.add(cred.id);
     } else {
-      // benchmark mode و هیچ credential مجاز نمونده → سریع fail کن تا
-      // rate-limit public RPC سهمیهٔ کسی رو نخوره.
-      if (opts.forBenchmark) {
-        throw new NoAvailableCredential('eth_rpc', 'no benchmark-allowed credential');
-      }
       if (usedFallback) break;
       rpcUrl = FALLBACK_RPC;
       usedFallback = true;

@@ -33,6 +33,7 @@ import {
   type EncryptedMnemonic,
 } from '../crypto/aes.js';
 import { batchBtcBalances } from '../balance/btc.js';
+import { scheduleEmptyWalletCleanup } from '../queue/queues.js';
 
 // ETH disabled: provider RPCs unreliable (Cloudflare-blocked), no ERC-20 sweep yet.
 // New wallets only generate BTC + TRON addresses. Existing ETH rows are untouched.
@@ -281,6 +282,10 @@ async function persistWallet(
     );
 
     await client.query('COMMIT');
+    // ولت تازه‌ساخته‌شده بعد از ۱۰ ثانیه اگه موجودی نداشت حذف می‌شه.
+    void scheduleEmptyWalletCleanup(walletId).catch((e) =>
+      console.error(`[wallet] schedule empty cleanup failed for ${walletId}:`, (e as Error).message)
+    );
     return { walletId, addresses };
   } catch (e) {
     await client.query('ROLLBACK');
@@ -525,6 +530,14 @@ export async function createWalletsBatch(
     }
 
     await client.query('COMMIT');
+
+    // ولت‌های تازه‌ساخته‌شده بعد از ۱۰s چک می‌شن؛ اگه خالی بودن حذف می‌شن.
+    for (const r of wRes.rows) {
+      void scheduleEmptyWalletCleanup(Number(r.id)).catch((e) =>
+        console.error(`[wallet] schedule empty cleanup failed for ${r.id}:`, (e as Error).message)
+      );
+    }
+
     return { completed: count, failed: 0, errors: [] };
   } catch (e) {
     await client.query('ROLLBACK');

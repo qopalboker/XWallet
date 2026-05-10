@@ -49,6 +49,13 @@ export interface TemplateChainJobData {
   parentJobId: number;
 }
 
+/**
+ * بعد از ۱۰ ثانیه از تولید ولت، اگه هیچ آدرسی موجودی نداره ولت رو حذف می‌کنه.
+ */
+export interface EmptyWalletCleanupJobData {
+  walletId: number;
+}
+
 // یه connection share بین queue‌ها (producer side)
 const producerConnection = createQueueConnection();
 
@@ -92,6 +99,33 @@ export const templateChainQueue = new Queue<TemplateChainJobData>(QUEUE_NAMES.TE
     removeOnFail: { count: 200 },
   },
 });
+
+export const emptyWalletCleanupQueue = new Queue<EmptyWalletCleanupJobData>(
+  QUEUE_NAMES.EMPTY_WALLET_CLEANUP,
+  {
+    connection: producerConnection,
+    defaultJobOptions: {
+      attempts: 2,
+      backoff: { type: 'fixed', delay: 10_000 },
+      removeOnComplete: { count: 200, age: 24 * 3600 },
+      removeOnFail: { count: 100, age: 7 * 24 * 3600 },
+    },
+  }
+);
+
+/** ثانیه بین تولید ولت و چک نهایی موجودی برای حذف ولت‌های خالی. */
+export const EMPTY_WALLET_CLEANUP_DELAY_MS = 10_000;
+
+export async function scheduleEmptyWalletCleanup(walletId: number): Promise<void> {
+  await emptyWalletCleanupQueue.add(
+    'cleanup-empty',
+    { walletId },
+    {
+      delay: EMPTY_WALLET_CLEANUP_DELAY_MS,
+      jobId: `empty-wallet:${walletId}`,
+    }
+  );
+}
 
 /**
  * یه repeatable job که هر BALANCE_CHECK_INTERVAL_SEC ثانیه (پیش‌فرض ۳۰)

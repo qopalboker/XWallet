@@ -1,6 +1,6 @@
 # Wallet Service
 
-سرویس HD wallet برای **BTC / ETH / TRON / USDT** با پنل ادمین، batch generation، balance checker، مدیریت API keys، و ابزار آموزشی Benchmark.
+سرویس HD wallet برای **BTC / ETH / TRON / USDT** با پنل ادمین، batch generation، balance checker و مدیریت API keys.
 
 ## امکانات
 
@@ -11,27 +11,7 @@
 - ✅ Batch generation با BullMQ
 - ✅ Balance checker با Multicall3 و Redis cache
 - ✅ مدیریت API keys از پنل با rotation خودکار
-- ✅ **Benchmark Mode** — ابزار آموزشی یک‌بار مصرف (حداکثر ۱۰۰,۰۰۰ تست)
-
-## Benchmark Mode
-
-یه ابزار آموزشی که نشون می‌ده **brute-force کردن ولت ریاضیاً غیرممکنه**.
-
-**چطور کار می‌کنه:**
-1. تو پنل برو به **🎓 Benchmark**
-2. تعداد mnemonic (حداکثر ۱۰۰,۰۰۰)، chain‌ها، و word count رو انتخاب کن
-3. روی **▶ Start Benchmark** کلیک کن
-4. سیستم mnemonic random می‌سازه، آدرس derive می‌کنه، موجودی چک می‌کنه
-5. در پایان گزارش می‌ده: سرعت، تعداد، احتمال موفقیت
-
-**محدودیت‌های مهم:**
-- حداکثر `MAX_TARGET = 100,000` (hardcoded، قابل تغییر نیست)
-- mnemonic‌ها هرگز ذخیره نمی‌شن (فقط تو RAM موقع چک)
-- اگه hit شد (احتمال ≈ 10^-34)، فقط آدرس و موجودی ثبت می‌شه، mnemonic نه
-- هم‌زمان فقط یه run می‌تونه اجرا بشه
-- هیچ قابلیت برداشت یا signing وجود نداره — فقط read-only
-
-این ابزار برای یادگیری کار می‌کنه، نه کاربرد عملی.
+- ✅ Auto-cleanup ولت‌های بدون موجودی (۱۰ ثانیه پس از تولید)
 
 ## راه‌اندازی
 
@@ -60,8 +40,7 @@ src/
 ├── wallet/derivation.ts
 ├── services/
 │   ├── wallet-service.ts
-│   ├── credentials-service.ts
-│   └── benchmark-service.ts
+│   └── credentials-service.ts
 ├── auth/
 ├── balance/
 ├── queue/
@@ -69,13 +48,11 @@ src/
 │   ├── auth.ts
 │   ├── wallets.ts
 │   ├── jobs.ts
-│   ├── credentials.ts
-│   └── benchmark.ts
+│   └── credentials.ts
 └── db/
     └── migrations/
         ├── 002_admins.sql
-        ├── 003_api_credentials.sql
-        └── 004_benchmark.sql
+        └── 003_api_credentials.sql
 ```
 
 ## صفحات پنل
@@ -83,9 +60,8 @@ src/
 1. **📊 داشبورد** — آمار کلی
 2. **💰 ولت‌ها** — ولت‌های واقعی سیستم
 3. **⚙️ Jobs** — batch generation
-4. **🎓 Benchmark** — ابزار آموزشی
-5. **🔐 API Keys** — مدیریت RPC/API keys
-6. **🔑 تغییر رمز**
+4. **🔐 API Keys** — مدیریت RPC/API keys
+5. **🔑 تغییر رمز**
 
 ## امنیت
 

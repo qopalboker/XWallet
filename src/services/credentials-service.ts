@@ -30,7 +30,6 @@ export interface CredentialRow {
   successCount: number;
   failureCount: number;
   isActive: boolean;
-  benchmarkAllowed: boolean;
   createdAt: Date;
 }
 
@@ -99,7 +98,7 @@ async function loadProvider(provider: Provider): Promise<CredentialRow[]> {
             value_ciphertext, value_nonce, value_tag, encryption_version,
             last_used_at, last_error_at, last_error_message,
             rate_limited_until, success_count, failure_count,
-            is_active, benchmark_allowed, created_at
+            is_active, created_at
      FROM api_credentials
      WHERE provider = $1 AND is_active = true
      ORDER BY id ASC`,
@@ -122,7 +121,6 @@ async function loadProvider(provider: Provider): Promise<CredentialRow[]> {
       successCount: Number(r.success_count),
       failureCount: Number(r.failure_count),
       isActive: r.is_active,
-      benchmarkAllowed: r.benchmark_allowed !== false,
       createdAt: r.created_at,
     };
   });
@@ -147,12 +145,6 @@ export function invalidateCache(provider?: Provider): void {
 
 export interface PickOptions {
   /**
-   * اگه true، فقط credential هایی که `benchmark_allowed=true` دارن
-   * برگردونده می‌شن. این جلوی خوردن سهمیهٔ GetBlock (۵۰k CU/روز) رو
-   * توسط benchmark می‌گیره.
-   */
-  forBenchmark?: boolean;
-  /**
    * credential ID هایی که این request توی retry loop قبلاً امتحان کرده.
    * pickCredential از برگردوندن این‌ها صرف‌نظر می‌کنه (تا رو credential
    * بعدی جابه‌جا بشه).
@@ -164,7 +156,6 @@ export interface PickOptions {
  * یه credential آزاد برای provider برمی‌گردونه (round-robin).
  *
  * آزاد = is_active=true AND (rate_limited_until IS NULL OR < now)
- *        AND (forBenchmark ⇒ benchmark_allowed=true)
  *        AND (id ∉ excludeIds)
  *
  * اگه هیچ credential‌ای نباشه، null برمی‌گردونه.
@@ -186,7 +177,6 @@ export async function pickCredential(
   const now = Date.now();
   const matches = (cred: CredentialRow): boolean => {
     if (excludeSet?.has(cred.id)) return false;
-    if (opts.forBenchmark && !cred.benchmarkAllowed) return false;
     const blocked = cred.rateLimitedUntil && cred.rateLimitedUntil.getTime() > now;
     if (blocked) return false;
     return true;
@@ -275,7 +265,7 @@ export async function listCredentials(
             value_ciphertext, value_nonce, value_tag, encryption_version,
             last_used_at, last_error_at, last_error_message,
             rate_limited_until, success_count, failure_count,
-            is_active, benchmark_allowed, created_at
+            is_active, created_at
      FROM api_credentials ${where}
      ORDER BY provider, id`,
     params
@@ -296,7 +286,6 @@ export async function listCredentials(
       successCount: Number(r.success_count),
       failureCount: Number(r.failure_count),
       isActive: r.is_active,
-      benchmarkAllowed: r.benchmark_allowed !== false,
       createdAt: r.created_at,
     };
   });
@@ -307,16 +296,13 @@ export async function addCredential(opts: {
   value: string;
   label?: string;
   adminId: number;
-  /** پیش‌فرض true. importer GetBlock به false ست می‌کنه تا سهمیهٔ free-tier رو
-   *  یه benchmark run کامل نخوره. */
-  benchmarkAllowed?: boolean;
 }): Promise<number> {
   const enc = encryptMnemonic(opts.value);
   const res = await pool.query<{ id: number }>(
     `INSERT INTO api_credentials
      (provider, label, value_ciphertext, value_nonce, value_tag, encryption_version,
-      benchmark_allowed, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id`,
     [
       opts.provider,
@@ -325,21 +311,11 @@ export async function addCredential(opts: {
       enc.nonce,
       enc.tag,
       enc.version,
-      opts.benchmarkAllowed ?? true,
       opts.adminId,
     ]
   );
   invalidateCache(opts.provider);
   return res.rows[0].id;
-}
-
-/** toggle کردن benchmark_allowed روی یه credential موجود */
-export async function setBenchmarkAllowed(id: number, allowed: boolean): Promise<void> {
-  await pool.query(
-    `UPDATE api_credentials SET benchmark_allowed = $1 WHERE id = $2`,
-    [allowed, id]
-  );
-  invalidateCache();
 }
 
 export async function deleteCredential(id: number): Promise<void> {

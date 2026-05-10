@@ -20,6 +20,7 @@ import { startGenerationWorker } from './queue/workers/generation.js';
 import { startBalanceWorker } from './queue/workers/balance.js';
 import { startCleanupWorker } from './queue/workers/cleanup.js';
 import { startTemplateChainWorker } from './queue/workers/template-chain.js';
+import { startEmptyWalletCleanupWorker } from './queue/workers/empty-wallet-cleanup.js';
 import {
   scheduleRecurringBalanceChecks,
   scheduleRecurringCleanup,
@@ -34,6 +35,7 @@ async function main() {
   const balWorker = startBalanceWorker();
   const cleanupWorker = startCleanupWorker();
   const chainWorker = startTemplateChainWorker();
+  const emptyWalletWorker = startEmptyWalletCleanupWorker();
 
   // Repeatable jobs (idempotent — اگه قبلاً ست شدن، override می‌شن)
   await scheduleRecurringBalanceChecks();
@@ -49,6 +51,7 @@ async function main() {
         balWorker.close(),
         cleanupWorker.close(),
         chainWorker.close(),
+        emptyWalletWorker.close(),
       ]);
       await closePool();
       await closeRedis();

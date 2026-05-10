@@ -26,17 +26,16 @@ services:
       - ./src/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
       - ./src/db/migrations/002_admins.sql:/docker-entrypoint-initdb.d/02-admins.sql:ro
       - ./src/db/migrations/003_api_credentials.sql:/docker-entrypoint-initdb.d/03-api-credentials.sql:ro
-      - ./src/db/migrations/004_benchmark.sql:/docker-entrypoint-initdb.d/04-benchmark.sql:ro
       - ./src/db/migrations/005_generation_jobs_status_check.sql:/docker-entrypoint-initdb.d/05-status-check.sql:ro
       - ./src/db/migrations/006_addresses_next_check_at.sql:/docker-entrypoint-initdb.d/06-next-check.sql:ro
       - ./src/db/migrations/007_api_credentials_version.sql:/docker-entrypoint-initdb.d/07-cred-version.sql:ro
       - ./src/db/migrations/008_drop_dead_btc_rpc.sql:/docker-entrypoint-initdb.d/08-drop-btc-rpc.sql:ro
-      - ./src/db/migrations/009_benchmark_allowed.sql:/docker-entrypoint-initdb.d/09-benchmark-allowed.sql:ro
       - ./src/db/migrations/010_addresses_btc_address_type.sql:/docker-entrypoint-initdb.d/10-btc-address-type.sql:ro
       - ./src/db/migrations/011_chunked_jobs.sql:/docker-entrypoint-initdb.d/11-chunked-jobs.sql:ro
       - ./src/db/migrations/012_batch_templates.sql:/docker-entrypoint-initdb.d/12-batch-templates.sql:ro
       - ./src/db/migrations/013_drop_trongrid_credentials.sql:/docker-entrypoint-initdb.d/13-drop-trongrid.sql:ro
       - ./src/db/migrations/014_chain_triggers.sql:/docker-entrypoint-initdb.d/14-chain-triggers.sql:ro
+      - ./src/db/migrations/015_drop_benchmark.sql:/docker-entrypoint-initdb.d/15-drop-benchmark.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-postgres}"]
       interval: 5s

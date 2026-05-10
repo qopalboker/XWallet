@@ -440,7 +440,6 @@ createApp({
           <a href="#/wallets" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route.startsWith('/wallets') ? 'bg-slate-800' : ''">💰 ولت‌ها</a>
           <a href="#/jobs" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route.startsWith('/jobs') ? 'bg-slate-800' : ''">⚙️ Jobs</a>
           <a v-if="admin.role === 'super_admin'" href="#/templates" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route.startsWith('/templates') ? 'bg-slate-800' : ''">📋 Templates</a>
-          <a href="#/benchmark" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route.startsWith('/benchmark') ? 'bg-slate-800' : ''">🎓 Benchmark</a>
           <a href="#/credentials" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route === '/credentials' ? 'bg-slate-800' : ''">🔐 API Keys</a>
           <a href="#/test" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route === '/test' ? 'bg-slate-800' : ''">🧪 تست</a>
           <a href="#/change-password" class="block px-3 py-2 rounded hover:bg-slate-800" :class="route === '/change-password' ? 'bg-slate-800' : ''">🔑 تغییر رمز</a>
@@ -465,7 +464,6 @@ createApp({
         <wallet-detail-page v-else-if="route.startsWith('/wallets/')" :id="route.split('/')[2]" @back="navigate('/wallets')"></wallet-detail-page>
         <jobs-page v-else-if="route === '/jobs'"></jobs-page>
         <templates-page v-else-if="route === '/templates' && admin.role === 'super_admin'"></templates-page>
-        <benchmark-page v-else-if="route === '/benchmark'"></benchmark-page>
         <credentials-page v-else-if="route === '/credentials'"></credentials-page>
         <test-page v-else-if="route === '/test'"></test-page>
         <div v-else class="text-slate-500">صفحه یافت نشد</div>
@@ -755,12 +753,19 @@ createApp({
         showNew.value = false; load();
       } catch (e) { newError.value = e.message || 'خطا'; } finally { newBusy.value = false; }
     };
+    const remove = async (id) => {
+      if (!confirm('این batch حذف بشه؟ chunkهای در صف هم لغو می‌شن.')) return;
+      try {
+        await api('/api/jobs/' + id, { method: 'DELETE' });
+        load();
+      } catch (e) { alert(e.message || 'خطا در حذف'); }
+    };
     const statusColor = (s) => ({
       pending: 'bg-slate-200', running: 'bg-blue-100 text-blue-800',
       completed: 'bg-emerald-100 text-emerald-800', partial: 'bg-amber-100 text-amber-800',
       failed: 'bg-red-100 text-red-800',
     }[s] || 'bg-slate-100');
-    return { jobs, showNew, form, newError, newBusy, submit, statusColor };
+    return { jobs, showNew, form, newError, newBusy, submit, remove, statusColor };
   },
   template: `
     <div>
@@ -770,14 +775,17 @@ createApp({
       </div>
       <div class="bg-white rounded-xl shadow overflow-hidden">
         <table class="w-full text-sm">
-          <thead class="bg-slate-50 border-b"><tr><th class="p-3 text-right">ID</th><th class="p-3 text-right">کلمات</th><th class="p-3 text-right">پیشرفت</th><th class="p-3 text-right">وضعیت</th></tr></thead>
+          <thead class="bg-slate-50 border-b"><tr><th class="p-3 text-right">ID</th><th class="p-3 text-right">کلمات</th><th class="p-3 text-right">پیشرفت</th><th class="p-3 text-right">وضعیت</th><th></th></tr></thead>
           <tbody>
             <tr v-for="j in jobs.items" :key="j.id" class="border-b">
               <td class="p-3 mono">{{ j.id }}</td><td class="p-3">{{ j.word_count }}</td>
               <td class="p-3"><div class="flex items-center gap-2"><div class="flex-1 bg-slate-200 rounded-full h-2 min-w-[100px]"><div class="bg-blue-500 h-2 rounded-full" :style="{ width: (j.completed / j.total_count * 100) + '%' }"></div></div><span class="text-xs mono">{{ j.completed }}/{{ j.total_count }}</span></div></td>
               <td class="p-3"><span class="px-2 py-0.5 rounded text-xs" :class="statusColor(j.status)">{{ j.status }}</span></td>
+              <td class="p-3 text-xs whitespace-nowrap text-left">
+                <button @click="remove(j.id)" class="text-red-600 hover:underline">حذف</button>
+              </td>
             </tr>
-            <tr v-if="jobs.items.length === 0"><td colspan="4" class="p-6 text-center text-slate-400">هیچ job‌ای نیست</td></tr>
+            <tr v-if="jobs.items.length === 0"><td colspan="5" class="p-6 text-center text-slate-400">هیچ job‌ای نیست</td></tr>
           </tbody>
         </table>
       </div>
@@ -1053,189 +1061,6 @@ createApp({
     </div>
   `,
 })
-.component('benchmark-page', {
-  setup() {
-    const current = ref({ running: false });
-    const runs = ref([]);
-    const math = ref(null);
-    const form = reactive({ targetCount: 10000, wordCount: 12, addressesPerMnemonic: 3, chains: ['BTC', 'ETH', 'TRON'] });
-    const error = ref(''), busy = ref(false);
-    let timer = null;
-
-    const load = async () => {
-      try {
-        const [c, r, m] = await Promise.all([
-          api('/api/benchmark/current'),
-          api('/api/benchmark/runs?limit=10'),
-          math.value ? Promise.resolve({ ...math.value }) : api('/api/benchmark/math'),
-        ]);
-        current.value = c; runs.value = r.items; math.value = m;
-      } catch {}
-    };
-
-    onMounted(() => { load(); timer = setInterval(load, 2000); });
-    onUnmounted(() => clearInterval(timer));
-
-    const start = async () => {
-      error.value = ''; busy.value = true;
-      try {
-        await api('/api/benchmark/start', { method: 'POST', body: {
-          targetCount: Number(form.targetCount),
-          wordCount: Number(form.wordCount),
-          addressesPerMnemonic: Number(form.addressesPerMnemonic),
-          chains: form.chains,
-        }});
-        load();
-      } catch (e) { error.value = e.message || 'خطا'; } finally { busy.value = false; }
-    };
-
-    const stop = async () => {
-      await api('/api/benchmark/stop', { method: 'POST' });
-      load();
-    };
-
-    const toggleChain = (c) => {
-      const i = form.chains.indexOf(c);
-      if (i >= 0) form.chains.splice(i, 1); else form.chains.push(c);
-    };
-
-    const progress = computed(() => {
-      if (!current.value.running) return 0;
-      const r = current.value.run;
-      return Math.round((r.checked_count / r.target_count) * 100);
-    });
-
-    const statusColor = (s) => ({
-      running: 'bg-blue-100 text-blue-800',
-      completed: 'bg-emerald-100 text-emerald-800',
-      stopped: 'bg-amber-100 text-amber-800',
-      failed: 'bg-red-100 text-red-800',
-    }[s] || 'bg-slate-100');
-
-    return { current, runs, math, form, error, busy, start, stop, toggleChain, progress, statusColor };
-  },
-  template: `
-    <div>
-      <h2 class="text-2xl font-bold mb-2">🎓 Educational Benchmark</h2>
-      <p class="text-sm text-slate-600 mb-6">ابزار آموزشی برای نشون دادن اینکه brute-force ولت ریاضیاً غیرممکنه.</p>
-
-      <!-- Math box -->
-      <div v-if="math" class="bg-gradient-to-br from-slate-900 to-slate-800 text-white p-6 rounded-xl mb-6">
-        <div class="text-sm text-slate-300 mb-2">ریاضی پشت این ماجرا</div>
-        <div class="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
-          <div>
-            <div class="text-xs text-slate-400">فضای جستجو ۱۲ کلمه</div>
-            <div class="mono text-amber-300">{{ math.searchSpace12Words }}</div>
-          </div>
-          <div>
-            <div class="text-xs text-slate-400">فضای جستجو ۲۴ کلمه</div>
-            <div class="mono text-amber-300">{{ math.searchSpace24Words }}</div>
-          </div>
-          <div>
-            <div class="text-xs text-slate-400">اتم‌های کل جهان</div>
-            <div class="mono text-slate-300">{{ math.atomsInUniverse }}</div>
-          </div>
-        </div>
-        <div class="mt-4 text-sm text-slate-300 leading-relaxed">{{ math.explanation.fa }}</div>
-        <div class="mt-4 p-3 bg-slate-950/50 rounded text-xs">
-          <div class="text-slate-400 mb-1">احتمال پیدا کردن با حداکثر ({{ math.maxTarget.toLocaleString() }}) تست:</div>
-          <div class="mono text-amber-300">{{ math.probabilityForMaxTarget.value }}</div>
-          <div class="text-slate-400 mt-1">≈ {{ math.probabilityForMaxTarget.comparison }}</div>
-        </div>
-      </div>
-
-      <!-- Current run -->
-      <div v-if="current.running" class="bg-white p-6 rounded-xl shadow mb-6">
-        <div class="flex items-center justify-between mb-4">
-          <h3 class="font-bold">Run #{{ current.run.id }} — در حال اجرا</h3>
-          <button @click="stop" class="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700">⏹ Stop</button>
-        </div>
-        <div class="mb-3">
-          <div class="flex items-center justify-between mb-1">
-            <span class="text-sm">{{ current.run.checked_count.toLocaleString() }} / {{ current.run.target_count.toLocaleString() }}</span>
-            <span class="text-sm mono">{{ progress }}%</span>
-          </div>
-          <div class="bg-slate-200 rounded-full h-3">
-            <div class="bg-blue-500 h-3 rounded-full transition-all" :style="{ width: progress + '%' }"></div>
-          </div>
-        </div>
-        <div class="grid grid-cols-3 gap-4 text-sm">
-          <div><div class="text-slate-500">سرعت</div><div class="mono font-bold">{{ current.run.avg_rate_per_sec }} /sec</div></div>
-          <div><div class="text-slate-500">Hits</div><div class="mono font-bold" :class="current.run.hit_count > 0 ? 'text-amber-600' : 'text-slate-400'">{{ current.run.hit_count }}</div></div>
-          <div><div class="text-slate-500">Chains</div><div class="mono text-xs">{{ current.run.chains.join(', ') }}</div></div>
-        </div>
-      </div>
-
-      <!-- Start form -->
-      <div v-else class="bg-white p-6 rounded-xl shadow mb-6">
-        <h3 class="font-bold mb-4">شروع Benchmark جدید</h3>
-        <div class="space-y-4">
-          <div>
-            <label class="block text-sm mb-1">تعداد mnemonic (حداکثر {{ math ? math.maxTarget.toLocaleString() : '100,000' }})</label>
-            <input v-model="form.targetCount" type="number" min="1" :max="math ? math.maxTarget : 100000" class="w-full px-3 py-2 border rounded" />
-          </div>
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="block text-sm mb-1">تعداد کلمات</label>
-              <select v-model="form.wordCount" class="w-full px-3 py-2 border rounded bg-white">
-                <option :value="12">۱۲ کلمه</option>
-                <option :value="24">۲۴ کلمه</option>
-              </select>
-            </div>
-            <div>
-              <label class="block text-sm mb-1">آدرس per mnemonic</label>
-              <input v-model="form.addressesPerMnemonic" type="number" min="1" max="10" class="w-full px-3 py-2 border rounded" />
-            </div>
-          </div>
-          <div>
-            <label class="block text-sm mb-2">Chains</label>
-            <div class="flex gap-2">
-              <button v-for="c in ['BTC', 'ETH', 'TRON']" :key="c" @click="toggleChain(c)"
-                class="px-4 py-2 rounded border"
-                :class="form.chains.includes(c) ? 'bg-blue-600 text-white border-blue-600' : 'bg-white'">
-                {{ c }}
-              </button>
-            </div>
-          </div>
-          <div v-if="error" class="text-red-600 text-sm">{{ error }}</div>
-          <button @click="start" :disabled="busy || form.chains.length === 0" class="w-full py-3 bg-emerald-600 text-white rounded hover:bg-emerald-700 disabled:opacity-50 font-bold">
-            ▶ {{ busy ? '...' : 'Start Benchmark' }}
-          </button>
-        </div>
-      </div>
-
-      <!-- History -->
-      <h3 class="font-bold mb-3">تاریخچه</h3>
-      <div class="bg-white rounded-xl shadow overflow-hidden">
-        <table class="w-full text-sm">
-          <thead class="bg-slate-50 border-b">
-            <tr>
-              <th class="p-3 text-right">ID</th>
-              <th class="p-3 text-right">هدف</th>
-              <th class="p-3 text-right">چک‌شده</th>
-              <th class="p-3 text-right">Hits</th>
-              <th class="p-3 text-right">سرعت</th>
-              <th class="p-3 text-right">مدت</th>
-              <th class="p-3 text-right">وضعیت</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="r in runs" :key="r.id" class="border-b hover:bg-slate-50">
-              <td class="p-3 mono">{{ r.id }}</td>
-              <td class="p-3 mono">{{ r.target_count.toLocaleString() }}</td>
-              <td class="p-3 mono">{{ r.checked_count.toLocaleString() }}</td>
-              <td class="p-3 mono" :class="r.hit_count > 0 ? 'text-amber-600 font-bold' : 'text-slate-400'">{{ r.hit_count }}</td>
-              <td class="p-3 mono text-xs">{{ r.avg_rate_per_sec || '—' }} /sec</td>
-              <td class="p-3 mono text-xs">{{ r.duration_ms ? (r.duration_ms / 1000).toFixed(1) + 's' : '—' }}</td>
-              <td class="p-3"><span class="px-2 py-0.5 rounded text-xs" :class="statusColor(r.status)">{{ r.status }}</span></td>
-            </tr>
-            <tr v-if="runs.length === 0"><td colspan="7" class="p-6 text-center text-slate-400">هیچ run‌ای نیست</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  `,
-})
 .component('credentials-page', {
   setup() {
     const items = ref([]);
@@ -1275,10 +1100,6 @@ createApp({
     const remove = async (id) => { if (!confirm('حذف؟')) return; await api('/api/credentials/' + id, { method: 'DELETE' }); load(); };
     const toggle = async (cred) => { await api('/api/credentials/' + cred.id + '/toggle', { method: 'POST', body: { active: !cred.isActive } }); load(); };
     const unblock = async (id) => { await api('/api/credentials/' + id + '/unblock', { method: 'POST' }); load(); };
-    const toggleBenchmark = async (cred) => {
-      await api('/api/credentials/' + cred.id + '/benchmark', { method: 'POST', body: { allowed: !cred.benchmarkAllowed } });
-      load();
-    };
     const providerLabel = (p) => ({ trongrid: 'TronGrid', eth_rpc: 'ETH RPC', btc_api: 'BTC API' }[p] || p);
     const isBlocked = (cred) => cred.rateLimitedUntil && new Date(cred.rateLimitedUntil) > new Date();
     const grouped = computed(() => {
@@ -1286,7 +1107,7 @@ createApp({
       for (const i of items.value) if (g[i.provider]) g[i.provider].push(i);
       return g;
     });
-    return { showNew, showGbImport, form, gbForm, gbBusy, gbResult, gbError, gbImport, newError, newBusy, submit, remove, toggle, unblock, toggleBenchmark, providerLabel, isBlocked, grouped };
+    return { showNew, showGbImport, form, gbForm, gbBusy, gbResult, gbError, gbImport, newError, newBusy, submit, remove, toggle, unblock, providerLabel, isBlocked, grouped };
   },
   template: `
     <div>
@@ -1301,7 +1122,7 @@ createApp({
         <h3 class="font-bold mb-3">{{ providerLabel(provider) }} ({{ grouped[provider].length }})</h3>
         <div class="bg-white rounded-xl shadow overflow-hidden">
           <table class="w-full text-sm">
-            <thead class="bg-slate-50 border-b"><tr><th class="p-3 text-right">ID</th><th class="p-3 text-right">برچسب</th><th class="p-3 text-right">مقدار</th><th class="p-3 text-right">موفق</th><th class="p-3 text-right">ناموفق</th><th class="p-3 text-right">وضعیت</th><th class="p-3 text-right">Bench</th><th></th></tr></thead>
+            <thead class="bg-slate-50 border-b"><tr><th class="p-3 text-right">ID</th><th class="p-3 text-right">برچسب</th><th class="p-3 text-right">مقدار</th><th class="p-3 text-right">موفق</th><th class="p-3 text-right">ناموفق</th><th class="p-3 text-right">وضعیت</th><th></th></tr></thead>
             <tbody>
               <tr v-for="c in grouped[provider]" :key="c.id" class="border-b">
                 <td class="p-3 mono">{{ c.id }}</td><td class="p-3">{{ c.label || '—' }}</td>
@@ -1309,18 +1130,13 @@ createApp({
                 <td class="p-3 mono text-emerald-700">{{ c.successCount }}</td>
                 <td class="p-3 mono text-red-700">{{ c.failureCount }}</td>
                 <td class="p-3"><span v-if="isBlocked(c)" class="px-2 py-0.5 rounded text-xs bg-amber-100">⏸ blocked</span><span v-else-if="c.isActive" class="px-2 py-0.5 rounded text-xs bg-emerald-100 text-emerald-800">✔</span><span v-else class="px-2 py-0.5 rounded text-xs bg-slate-200">غیرفعال</span></td>
-                <td class="p-3 text-xs">
-                  <button @click="toggleBenchmark(c)" :title="c.benchmarkAllowed ? 'کلیک: ممنوع کردن benchmark' : 'کلیک: مجاز کردن benchmark'" class="px-2 py-0.5 rounded text-xs" :class="c.benchmarkAllowed ? 'bg-sky-100 text-sky-800' : 'bg-slate-200 text-slate-600'">
-                    {{ c.benchmarkAllowed ? '✓' : '✗' }}
-                  </button>
-                </td>
                 <td class="p-3 text-xs whitespace-nowrap">
                   <button v-if="isBlocked(c)" @click="unblock(c.id)" class="text-amber-600 me-2">unblock</button>
                   <button @click="toggle(c)" class="text-blue-600 me-2">{{ c.isActive ? 'غیرفعال' : 'فعال' }}</button>
                   <button @click="remove(c.id)" class="text-red-600">حذف</button>
                 </td>
               </tr>
-              <tr v-if="grouped[provider].length === 0"><td colspan="8" class="p-4 text-center text-slate-400 text-sm">هیچ کلیدی نیست</td></tr>
+              <tr v-if="grouped[provider].length === 0"><td colspan="7" class="p-4 text-center text-slate-400 text-sm">هیچ کلیدی نیست</td></tr>
             </tbody>
           </table>
         </div>
@@ -1343,7 +1159,7 @@ createApp({
         <div class="flex min-h-full items-start justify-center px-4 py-8">
           <div class="bg-white rounded-xl shadow-xl max-w-xl w-full p-6">
             <h3 class="text-lg font-bold mb-2">📥 ایمپورت یکجا از GetBlock</h3>
-            <p class="text-sm text-slate-500 mb-3">فایل JSON دانلود‌شده از داشبورد GetBlock رو اینجا پیست کن. توکن‌ها خودکار با آدرس کامل endpoint ذخیره می‌شن و روی <code>benchmark_allowed=false</code> تنظیم می‌شن تا سهمیهٔ free-tier حفظ بشه.</p>
+            <p class="text-sm text-slate-500 mb-3">فایل JSON دانلود‌شده از داشبورد GetBlock رو اینجا پیست کن. توکن‌ها خودکار با آدرس کامل endpoint ذخیره می‌شن.</p>
             <form @submit.prevent="gbImport" class="space-y-3">
               <textarea v-model="gbForm.config" rows="8" required dir="ltr" class="w-full px-3 py-2 border rounded mono text-xs font-mono" placeholder='{"shared":{"eth":{"mainnet":{"jsonRpc":["<token>"]}}}}'></textarea>
               <label class="flex items-center gap-2 text-sm"><input type="checkbox" v-model="gbForm.skipExisting"> رد کردن توکن‌های تکراری (بر اساس label)</label>
